@@ -27,12 +27,12 @@ DEADZONE = 0.15
 
 # Degrees of lead at full stick deflection. Bigger = faster. Start small.
 LEAD = {
-    "shoulder_pan": 8.0,
-    "shoulder_lift": 8.0,
-    "elbow_flex": 8.0,
-    "wrist_flex": 8.0,
+    "shoulder_pan": 4.0,
+    "shoulder_lift": 4.0,
+    "elbow_flex": 4.0,
+    "wrist_flex": 4.0,
     "wrist_roll": 10.0,
-    "gripper": 10.0,
+    "gripper": 6.0,
 }
 
 # Flip a sign here if a joint moves the opposite way to what feels natural.
