@@ -29,11 +29,11 @@ for (n1, m1), (n2, m2) in itertools.combinations(allm.items(), 2):
         bad += 1; log(f"  COLLISION {n1} x {n2}: {v:.1f} mm3")
 log(f"  {'OK, none' if bad == 0 else str(bad) + ' collisions'}")
 
-log("\n== 2. Tilt sweep -20..+20 deg (cradle + washer + Perses vs everything else) ==")
+log(f"\n== 2. Tilt sweep +-{T.TILT_LIMIT:.0f} deg (tilting group vs everything else) ==")
 tilt_bad = {}
 for deg in range(-int(T.TILT_LIMIT), int(T.TILT_LIMIT) + 1, 5):
     M = Rot(np.radians(deg), (0, 1, 0), point=(0, 0, T.ZT))
-    for n1 in T.TILTING:
+    for n1 in [n for n in T.TILTING if n in allm]:
         m1 = allm[n1].copy(); m1.apply_transform(M)
         for n2, m2 in allm.items():
             if n2 in T.TILTING: continue
@@ -45,9 +45,11 @@ else:
     log("  OK, nothing touches through the full tilt range")
 
 # how close does the Perses grip come to the turntable?
-gmin = min((lambda m: (m.apply_transform(Rot(np.radians(d), (0, 1, 0), point=(0, 0, T.ZT))), m.bounds[0][2])[1])(allm["perses"].copy())
-           for d in (-20, 20))
-log(f"  lowest Perses point over the tilt range: z = {gmin:.1f}  (turntable top {T.TT_Z1:.1f}, tower feet top {T.TT_Z1 + 6:.1f})")
+pay = [n for n in T.TILTING if n in allm and n not in ("shaft_washer", "horn_spacer", "stub_shaft")]
+def low(d):
+    return min(allm[n].copy().apply_transform(Rot(np.radians(d), (0, 1, 0), point=(0, 0, T.ZT))).bounds[0][2] for n in pay)
+gmin = min(low(-T.TILT_LIMIT), low(T.TILT_LIMIT))
+log(f"  payload: {T.PAYLOAD}, tilt limit +-{T.TILT_LIMIT:.0f} deg, lowest tilting point z = {gmin:.1f}  (turntable top {T.TT_Z1:.1f}, tower feet top {T.TT_Z1 + 6:.1f})")
 
 log("\n== 3. Pan sweep 0..345 deg (moving group vs base + pan cap + pan servo) ==")
 pan_bad = {}
@@ -73,7 +75,7 @@ log(f"  tilt idler: seat d{T.BRG_SEAT:.2f} on 6802 d24 (press), stub d{T.SHAFT_D
 log(f"  servo pockets: {2*T.SV_X:.1f} x {2*T.SV_Y:.1f} body in {2*(T.SV_X+T.C):.1f} x {2*(T.SV_Y+T.C):.1f} pocket")
 
 log("\n== 5. Screws ==")
-solids = {n: m for n, m in allm.items() if n not in ("perses",)}
+solids = {n: m for n, m in allm.items() if n not in ("perses", "webcam")}
 def inside_any(pts, skip=()):
     res = np.zeros(len(pts), bool); who = [None] * len(pts)
     for n, m in solids.items():
@@ -103,7 +105,7 @@ for label, L, head, ax, target in T.screws():
     # (c) engagement: ring points at r=2.6 (inserts) or r=1.45 (horn thread) around the last 3 mm
     perp = np.cross(ax, [0, 0, 1]) if abs(ax[2]) < 0.9 else np.cross(ax, [1, 0, 0]); perp /= np.linalg.norm(perp)
     perp2 = np.cross(ax, perp)
-    rr = 2.6 if target == "insert" else 1.45
+    rr = 2.6 if target.startswith("insert") else 1.45
     tip_ts = np.arange(0.1, L, 0.1)
     ring = np.array([head + ax * t + rr * (np.cos(a) * perp + np.sin(a) * perp2) for t in tip_ts for a in np.linspace(0, 2 * np.pi, 8, endpoint=False)])
     r_in, r_who = inside_any(ring)
@@ -116,6 +118,7 @@ for label, L, head, ax, target in T.screws():
         # inserts: material at r=2.6 over the last insert length (hole d4 + insert in it)
         eng = 0.1 * sum(per_t[tip_ts > L - T.INSERT_LEN])
     need = 2.0 if target == "horn" else 3.5
+    if target == "insert_setscrew": need = 3.5; eng = 0.1 * sum(per_t[(tip_ts > 0) & (tip_ts < T.INSERT_LEN)])
     problems = []
     if h_in.any(): problems.append(f"head hits {set(w for w in h_who if w)}")
     if a_in.any(): problems.append(f"shank runs into {set(w for w in a_who if w)} at t={ts[a_in].round(1).tolist()}")

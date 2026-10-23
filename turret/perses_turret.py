@@ -204,20 +204,52 @@ def tower_bearing():
             cuts.append(cyl(CB_D / 2, (x, yy, TT_Z1 + 6), (x, yy, ZT), 24))
     return D(t, *cuts)
 
+def ears_and_cuts():
+    """Hinge interface shared by every payload plate: two ears on the tilt axis at y = +-(40..45),
+    right ear bolted to the tilt horn through the horn spacer, left ear takes the stub shaft."""
+    ears = [U(box((-20, ylo, ZT), (20, yhi, CR_Z0 + 0.01)), cyl(20, (0, ylo, ZT), (0, yhi, ZT)))
+            for ylo, yhi in ((YI, YO), (-YO, -YI))]
+    cuts = [W(h, TILT_M) for h in horn_bolt_cuts(TILT_EAR_LOCAL[1] + 1, HORN_FACE + TILT_CLAMP)]
+    cuts.append(cyl(7.65, (0, YI - 1, ZT), (0, YO + 1, ZT)))
+    for x, z in STUB_BOLTS:
+        cuts.append(cyl(INSERT_D / 2, (x, YI - 0.5, ZT + z), (x, YO + 0.5, ZT + z), 24))
+    return ears, cuts
+
+# laser plate (payload until the Perses arrives)
+LP_X = 60.0                         # plate half length
+LASER_X0, LASER_X1 = 22.0, 58.0     # laser block along x
+LASER_Z = CR_Z1 + 11.0              # bore centre height
+CAM_RISER = 20.0                    # webcam pad height, lens clears the laser block
+
+def laser_plate():
+    floor = box((-LP_X, -YO, CR_Z0), (LP_X, YO, CR_Z1))
+    block = box((LASER_X0, -12, CR_Z1 - 0.01), (LASER_X1, 12, CR_Z1 + 22))
+    riser = box((-LP_X, -30, CR_Z1 - 0.01), (-18, 30, CR_Z1 + CAM_RISER))
+    ears, cuts = ears_and_cuts()
+    p = U(floor, block, riser, *ears)
+    cuts += [cyl(10.5 / 2 + 0.15, (LASER_X0 - 1, 0, LASER_Z), (LASER_X1 + 1, 0, LASER_Z)),               # VLM-650-01 bore
+             cyl(INSERT_D / 2, (40, 0, CR_Z1 + 22 - INSERT_DEPTH), (40, 0, CR_Z1 + 23), 24),             # set-screw insert
+             box((LASER_X0 - 1, -1.5, CR_Z1 - 1), (LASER_X0 + 6, 1.5, LASER_Z)),                          # lead exit slot
+             cyl(3.3, (-39, 0, CR_Z0 - 1), (-39, 0, CR_Z1 + CAM_RISER + 1)),                              # 1/4-20 webcam screw
+             cyl(6.5, (-39, 0, CR_Z0 - 1), (-39, 0, CR_Z1 + CAM_RISER - 6))]                              # nut / head pocket from below
+    for y in (-22, 22):                                                                                   # 20 mm velcro slots for clip webcams
+        cuts.append(box((-46, y - 2, CR_Z0 - 1), (-32, y + 2, CR_Z1 + CAM_RISER + 1)))
+    cuts.append(box((-12, -30, CR_Z0 - 1), (14, 30, CR_Z1 + 1)))                                          # tool access to the ear screws
+    return D(p, *cuts)
+
+def laser_proxy():
+    return cyl(10.5 / 2, (LASER_X1 - 19 + 1, 0, LASER_Z), (LASER_X1 + 1, 0, LASER_Z))
+
+def webcam_proxy():
+    """Generic USB webcam (C920-sized) sitting on the riser."""
+    return box((-52, -47, CR_Z1 + CAM_RISER), (-24, 47, CR_Z1 + CAM_RISER + 30))
+
 def cradle():
     floor = box((-CR_LEN / 2, -YO, CR_Z0), (CR_LEN / 2, YO, CR_Z1))
     walls = [box((-CR_LEN / 2, YI, CR_Z0), (CR_LEN / 2, YO, CR_Z1 + CR_WALL_H)),
              box((-CR_LEN / 2, -YO, CR_Z0), (CR_LEN / 2, -YI, CR_Z1 + CR_WALL_H))]
-    ears = []
-    for ylo, yhi in ((YI, YO), (-YO, -YI)):
-        ears.append(U(box((-20, ylo, ZT), (20, yhi, CR_Z0 + 0.01)), cyl(20, (0, ylo, ZT), (0, yhi, ZT))))
-    # right ear: clamped to the tilt horn through a separate 3 mm horn spacer (M3x8, 5.5 mm clamp)
+    ears, cuts = ears_and_cuts()
     c = U(floor, *walls, *ears)
-    cuts = [W(h, TILT_M) for h in horn_bolt_cuts(TILT_EAR_LOCAL[1] + 1, HORN_FACE + TILT_CLAMP)]
-    # left ear: d15.3 hole for the bolt-in stub shaft, 3 inserts for its flange
-    cuts.append(cyl(7.65, (0, YI - 1, ZT), (0, YO + 1, ZT)))
-    for x, z in STUB_BOLTS:
-        cuts.append(cyl(INSERT_D / 2, (x, YI - 0.5, ZT + z), (x, YO + 0.5, ZT + z), 24))
     cuts.append(box((-135, -27, CR_Z0 - 1), (25, 27, CR_Z1 + 1)))                          # grip / battery guard window
     cuts.append(box((37, -YI + 8, CR_Z0 - 1), (CR_LEN / 2 - 12, YI - 8, CR_Z1 + 1)))       # lightening
     for x in (-95, 85):                                                                  # 25 mm strap slots
@@ -272,7 +304,6 @@ parts = {
     "tower_servo": tower_servo(),
     "tilt_floor_cap": W(floor_cap(), TILT_M),
     "tower_bearing": tower_bearing(),
-    "cradle": cradle(),
     "shaft_washer": shaft_washer(),
     "horn_spacer": horn_spacer(),
     "stub_shaft": stub_shaft(),
@@ -280,13 +311,21 @@ parts = {
 for k, ang in enumerate(ROLL_ANG):
     parts[f"roller_axle_{k+1}"] = W(roller_axle(), roller_M(ang))
 
-hardware = {"servo_pan": W(servo, PAN_M), "servo_tilt": W(servo, TILT_M), "perses": perses_proxy(),
+# payload on the tilt hinge: "laser" (now) or "perses" (later). TURRET_PAYLOAD=perses to check the cradle.
+PAYLOAD = os.environ.get("TURRET_PAYLOAD", "laser")
+if PAYLOAD == "perses":
+    parts["cradle"] = cradle(); PAYLOAD_HW = {"perses": perses_proxy()}
+else:
+    parts["laser_plate"] = laser_plate(); PAYLOAD_HW = {"laser": laser_proxy(), "webcam": webcam_proxy()}
+    TILT_LIMIT = 40.0
+
+hardware = {"servo_pan": W(servo, PAN_M), "servo_tilt": W(servo, TILT_M), **PAYLOAD_HW,
             "bearing_tilt": W(bearing(), Tr((0, A + 1.0 + BRG_W / 2, ZT)) @ Rot(np.pi / 2, (1, 0, 0)))}
 for k, ang in enumerate(ROLL_ANG):
     hardware[f"bearing_roller_{k+1}"] = W(bearing(), roller_M(ang) @ Tr((0, 0, 2.0 + BRG_W / 2 + 0.2)))
 
 # groups for motion
-TILTING = {"cradle", "shaft_washer", "perses", "horn_spacer", "stub_shaft"}
+TILTING = {"cradle", "laser_plate", "shaft_washer", "horn_spacer", "stub_shaft"} | set(PAYLOAD_HW)
 STATIC = {"base", "pan_floor_cap", "servo_pan"}           # everything else pans
 
 # ------------------------------------------------------------------ screws: (name, part it passes, length, head point, axis, target)
@@ -315,20 +354,27 @@ def screws():
     for ang in ROLL_ANG:
         M = roller_M(ang)
         S.append(("roller axle -> post insert", 12, (M @ [0, 0, 7.4, 1])[:3], M[:3, :3] @ [0, 0, -1], "insert"))
+    if PAYLOAD == "laser":   # laser set screw from the top: M3x6, tip 0.25 mm into the laser body = clamped
+        S.append(("laser set screw", 6, np.array([40.0, 0, CR_Z1 + 22]), np.array([0, 0, -1.0]), "insert_setscrew"))
     # shaft washer -> stub insert: 2 + 4 = M3x6
     S.append(("washer -> stub insert", 6, np.array([0, A + 9.0, ZT]), np.array([0, -1.0, 0]), "insert"))
     return S
 
 if __name__ == "__main__":
+    if "cradle" not in parts:
+        parts_export = dict(parts); parts_export["cradle"] = cradle()
+    else:
+        parts_export = dict(parts)
     orient = {"base": Rot(np.pi, (1, 0, 0)),                    # deck on the bed, sleeve + skirt up
               "turntable": Rot(np.pi, (1, 0, 0)),               # top on the bed, hub + posts up
               "tower_servo": Rot(-np.pi / 2, (1, 0, 0)),        # inner face on the bed, sleeve up
               "tower_bearing": Rot(np.pi / 2, (1, 0, 0)),       # inner face on the bed
               "cradle": Rot(np.pi, (1, 0, 0)),                   # upside down: wall tops on the bed, ears up
+              "laser_plate": Rot(np.pi, (1, 0, 0)),              # upside down: block + riser tops on the bed, ears up
               "shaft_washer": Rot(np.pi / 2, (1, 0, 0)), "horn_spacer": Rot(np.pi / 2, (1, 0, 0)),
               "stub_shaft": Rot(np.pi / 2, (1, 0, 0)),          # flange on the bed, shaft up
               "pan_floor_cap": Rot(np.pi, (1, 0, 0)), "tilt_floor_cap": np.eye(4)}
-    for name, m in parts.items():
+    for name, m in parts_export.items():
         if name.startswith("roller_axle") and name != "roller_axle_1":
             continue
         mm = m.copy()

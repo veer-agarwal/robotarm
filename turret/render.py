@@ -9,14 +9,14 @@ import perses_turret as T
 
 COL = {"base": "#8a939e", "pan_floor_cap": "#5b6470", "turntable": "#b9c1ca", "tower_servo": "#2E75B6",
        "tilt_floor_cap": "#5b6470", "tower_bearing": "#2E75B6", "cradle": "#e8a33d", "shaft_washer": "#5b6470",
-       "servo_pan": "#262626", "servo_tilt": "#262626", "perses": "#d9534f", "bearing_tilt": "#d4af37"}
+       "servo_pan": "#262626", "servo_tilt": "#262626", "perses": "#d9534f", "laser_plate": "#e8a33d", "laser": "#d62728", "webcam": "#262626", "bearing_tilt": "#d4af37"}
 L = np.array([0.35, -0.55, 0.75]); L /= np.linalg.norm(L)
 
 def scene(pan=0, tilt=0, perses=True):
     out = []
     Mt = Rot(np.radians(tilt), (0, 1, 0), point=(0, 0, T.ZT)); Mp = Rot(np.radians(pan), (0, 0, 1))
     for n, m in {**T.parts, **T.hardware}.items():
-        if n == "perses" and not perses: continue
+        if n in T.PAYLOAD_HW and not perses: continue
         mm = m.copy()
         if n in T.TILTING: mm.apply_transform(Mt)
         if n not in T.STATIC: mm.apply_transform(Mp)
@@ -37,12 +37,12 @@ def draw(ax, sc, elev, azim, title, alpha_perses=None):
     ax.set_box_aspect((1, 1, 1)); ax.view_init(elev, azim); ax.set_axis_off(); ax.set_title(title, fontsize=10)
 
 fig = plt.figure(figsize=(16, 6))
-draw(fig.add_subplot(1, 3, 1, projection="3d"), scene(0, 0), 18, -42, "Assembly with Perses (proxy, red)")
-draw(fig.add_subplot(1, 3, 2, projection="3d"), scene(0, 20), 0, -90, "Side, tilted up 20 deg (limit)")
+draw(fig.add_subplot(1, 3, 1, projection="3d"), scene(0, 0), 18, -42, f"Assembly, payload: {T.PAYLOAD}")
+draw(fig.add_subplot(1, 3, 2, projection="3d"), scene(0, T.TILT_LIMIT), 0, -90, f"Side, tilted up {T.TILT_LIMIT:.0f} deg (limit)")
 draw(fig.add_subplot(1, 3, 3, projection="3d"), scene(0, 0), 0, 0, "Front")
 fig.suptitle("Perses pan-tilt turret: base + pan servo (grey/black), turntable on 3x 6802 rollers, towers (blue), "
              "tilt servo + 6802 idler, cradle (orange)", fontsize=10)
-plt.tight_layout(); plt.savefig("render_assembly.png", dpi=115); plt.close()
+plt.tight_layout(); plt.savefig(f"render_assembly_{T.PAYLOAD}.png", dpi=115); plt.close()
 
 fig = plt.figure(figsize=(16, 6))
 draw(fig.add_subplot(1, 3, 1, projection="3d"), scene(0, 0, False), 22, -42, "Mechanism (Perses hidden)")

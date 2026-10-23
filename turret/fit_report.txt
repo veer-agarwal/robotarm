@@ -1,9 +1,9 @@
 == 1. Collisions at rest (pan 0, tilt 0) ==
   OK, none
 
-== 2. Tilt sweep -20..+20 deg (cradle + washer + Perses vs everything else) ==
+== 2. Tilt sweep +-40 deg (tilting group vs everything else) ==
   OK, nothing touches through the full tilt range
-  lowest Perses point over the tilt range: z = 91.0  (turntable top 80.0, tower feet top 86.0)
+  payload: laser, tilt limit +-40 deg, lowest tilting point z = 187.2  (turntable top 80.0, tower feet top 86.0)
 
 == 3. Pan sweep 0..345 deg (moving group vs base + pan cap + pan servo) ==
   OK, free through 360
@@ -19,5 +19,5 @@
 
 == 5. Screws ==
   all screws: heads clear, shanks clear, tips engaged in inserts / horn threads
-  engagement (mm): cradle ear + spacer -> tilt horn M3x8: 2.4, pan_floor_cap -> sleeve insert M3x12: 4.8, pan_floor_cap -> sleeve insert M3x12: 4.9, roller axle -> post insert M3x12: 4.8, stub flange -> ear insert M3x8: 4.9, tilt_floor_cap -> sleeve insert M3x12: 4.8, tilt_floor_cap -> sleeve insert M3x12: 4.9, tower foot -> turntable M3x10: 4.8, turntable hub -> pan horn M3x6: 2.4, washer -> stub insert M3x6: 4.4
-  screw count: M3x10 x8, M3x12 x11, M3x6 x5, M3x8 x7
+  engagement (mm): cradle ear + spacer -> tilt horn M3x8: 2.4, laser set screw M3x6: 4.9, pan_floor_cap -> sleeve insert M3x12: 4.8, pan_floor_cap -> sleeve insert M3x12: 4.9, roller axle -> post insert M3x12: 4.8, stub flange -> ear insert M3x8: 4.9, tilt_floor_cap -> sleeve insert M3x12: 4.8, tower foot -> turntable M3x10: 4.8, turntable hub -> pan horn M3x6: 2.4, washer -> stub insert M3x6: 4.4
+  screw count: M3x10 x8, M3x12 x11, M3x6 x6, M3x8 x7
