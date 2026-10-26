@@ -5,7 +5,7 @@ let go, and move the gripper away.
 Builds on so101_lift_env (same arm, finger pads, block, actions, 20 Hz control).
 Episode = 160 steps (8 s). Target spawns 6-20 cm from the block, inside the same reachable patch.
 
-Success (held 10 steps): block within 2 cm of the target centre, resting on the table, no finger touching it,
+Success (10 consecutive steps; the episode keeps running so releasing is never worth less than hovering): block within 2 cm of the target centre, resting on the table, no finger touching it,
 grasp point at least 3 cm above the table, and the block was lifted >= 3 cm at some point (so pushing the
 block along the table doesn't count).
 
@@ -80,11 +80,12 @@ class SO101PlaceEnv(SO101LiftEnv):
                 reward += 1.0                                                     # keep holding while carrying
         success = self.was_lifted and at_goal and resting and not touch and gp[2] > BLOCK + 0.03
         self.held = self.held + 1 if success else 0
-        reward += 2.0 if success else 0.0
+        reward += 5.0 if success else 0.0
         reward -= 0.05 * float(np.sum(a[:5] ** 2))
         off_table = bp[2] < -0.05 or np.linalg.norm(bp[:2]) > 0.6
-        terminated = bool(self.held >= 10 or off_table)
-        if self.held >= 10: reward += 30.0
+        # no early termination on success: the placed-and-released state simply pays the most per step
+        # (18 vs <= 9 for hovering with the block), so the policy is never better off holding on.
+        terminated = bool(off_table)
         truncated = self.t >= EP_STEPS
         info = {"is_success": float(self.held >= 10), "lift": float(lift), "dist": float(d_grip),
                 "grasped": float(grasped), "goal_dist": float(d_goal_xy), "was_lifted": float(self.was_lifted)}
