@@ -9,9 +9,13 @@ teleop, 20 Hz control, 5 s episodes, block spawned anywhere in a 10 x 24 cm patc
   surfaces. Contacts stiffened so a 20 g block isn't squeezed through the pads.
 - `scripted_check.py`  sanity check: inverse-kinematics script must lift the block (20/20) before RL runs.
 - `train_lift.py`      SAC (stable-baselines3), parallel envs, eval every 50k steps on 30 fixed layouts.
-- `watch.py`           watch a trained policy in the MuJoCo viewer.
+- `so101_place_env.py` pick-and-place: carry the block to a green target disc 6-20 cm away, put it down,
+  let go and clear. Success needs a real lift (>= 3 cm), the block within 2 cm of the target, resting,
+  untouched, gripper >= 3 cm up, held 10 steps. Scripted check: 20/20.
+- `watch.py`           watch a trained policy in the MuJoCo viewer (pick-and-place model if present).
 
-Run: `sim_train.bat` (installs packages, checks the sim, trains 30 h). Watch: `sim_watch.bat`.
+Run: `sim_train.bat` (lift, 30 h) or `sim_train_place.bat` (pick-and-place, 12 h). Watch: `sim_watch.bat`.
+Lift result: 100% success after 850k steps (41 min on the RTX 2070 Super + 12 envs).
 Outputs in `runs/sac_lift/`: progress.csv, tensorboard logs (`tensorboard --logdir runs`), best_model.zip,
 checkpoints every 250k steps (rerunning sim_train.bat resumes), one eval video per 50k steps.
 

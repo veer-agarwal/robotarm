@@ -36,7 +36,7 @@ LIFT_SUCCESS = 0.04
 GRIP_OPEN, GRIP_CLOSED = 1.0, -0.17
 
 
-def build_model():
+def build_model(target_marker=False):
     spec = mujoco.MjSpec.from_file(ARM_XML)
     wb = spec.worldbody
     wb.add_light(pos=[0, 0, 1.5], dir=[0, 0, -1])
@@ -62,6 +62,10 @@ def build_model():
     blk.add_geom(name="block_geom", type=mujoco.mjtGeom.mjGEOM_BOX, size=[BLOCK] * 3, mass=0.02,
                  friction=[1.5, 0.02, 0.002], condim=4, solref=[0.004, 1], solimp=[0.99, 0.999, 0.0005, 0.5, 2],
                  rgba=[0.2, 0.5, 0.9, 1])
+    if target_marker:   # place-task goal: a flat green disc on a mocap body, no collisions
+        tgt = wb.add_body(name="target", pos=[0.22, 0.05, 0.0005], mocap=True)
+        tgt.add_geom(name="target_geom", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.02, 0.0005, 0],
+                     contype=0, conaffinity=0, rgba=[0.1, 0.9, 0.2, 0.6])
     return spec.compile()
 
 
@@ -79,8 +83,8 @@ def _moving_pad_pose():
 class SO101LiftEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": int(1 / CTRL_DT)}
 
-    def __init__(self, render_mode=None, seed=None):
-        self.model = build_model()
+    def __init__(self, render_mode=None, seed=None, target_marker=False):
+        self.model = build_model(target_marker)
         self.data = mujoco.MjData(self.model)
         m = self.model
         self.qadr = np.array([m.joint(j).qposadr[0] for j in JOINTS])

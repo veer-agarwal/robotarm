@@ -18,11 +18,13 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, CallbackList
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecMonitor
 from so101_lift_env import SO101LiftEnv
+from so101_place_env import SO101PlaceEnv
+ENVS = {"lift": SO101LiftEnv, "place": SO101PlaceEnv}
 
 
-def make_env(rank, seed):
+def make_env(task, rank, seed):
     def f():
-        return SO101LiftEnv(seed=seed + rank)
+        return ENVS[task](seed=seed + rank)
     return f
 
 
@@ -30,12 +32,12 @@ class EvalAndStop(BaseCallback):
     """Every `every` steps: deterministic eval on fixed seeds, CSV + tensorboard, best model, video.
     Stops training when the wall-clock budget is used up."""
 
-    def __init__(self, run_dir, every, n_eval, hours):
+    def __init__(self, run_dir, every, n_eval, hours, task="lift"):
         super().__init__()
         self.run_dir, self.every, self.n_eval = run_dir, every, n_eval
         self.deadline = time.time() + hours * 3600; self.t0 = time.time()
         self.best = -1.0; self.next_eval = every
-        self.env = SO101LiftEnv(seed=12345)
+        self.env = ENVS[task](seed=12345)
         self.csv = os.path.join(run_dir, "progress.csv")
         if not os.path.exists(self.csv):
             with open(self.csv, "w", newline="") as f:
@@ -85,7 +87,8 @@ class EvalAndStop(BaseCallback):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--name", default="sac_lift")
+    ap.add_argument("--task", choices=list(ENVS), default="lift")
+    ap.add_argument("--name", default=None)
     ap.add_argument("--hours", type=float, default=30.0)
     ap.add_argument("--envs", type=int, default=max(1, min(12, (os.cpu_count() or 4) - 2)))
     ap.add_argument("--steps", type=int, default=50_000_000)
@@ -95,11 +98,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
+    args.name = args.name or f"sac_{args.task}"
     run_dir = os.path.join("runs", args.name); os.makedirs(run_dir, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"device {device}, {args.envs} envs, budget {args.hours} h, run dir {run_dir}", flush=True)
+    print(f"task {args.task}, device {device}, {args.envs} envs, budget {args.hours} h, run dir {run_dir}", flush=True)
 
-    fns = [make_env(i, args.seed * 100) for i in range(args.envs)]
+    fns = [make_env(args.task, i, args.seed * 100) for i in range(args.envs)]
     venv = VecMonitor(SubprocVecEnv(fns) if args.envs > 1 else DummyVecEnv(fns))
 
     ckpts = sorted(glob.glob(os.path.join(run_dir, "checkpoints", "*.zip")), key=os.path.getmtime)
@@ -115,7 +119,7 @@ def main():
 
     cbs = CallbackList([
         CheckpointCallback(save_freq=max(1, 250_000 // args.envs), save_path=os.path.join(run_dir, "checkpoints"), name_prefix="sac"),
-        EvalAndStop(run_dir, args.eval_every, args.n_eval, args.hours),
+        EvalAndStop(run_dir, args.eval_every, args.n_eval, args.hours, args.task),
     ])
     model.learn(total_timesteps=args.steps, callback=cbs, reset_num_timesteps=not args.resume, progress_bar=False)
     model.save(os.path.join(run_dir, "final_model"))
