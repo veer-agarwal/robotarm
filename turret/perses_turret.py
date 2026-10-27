@@ -135,15 +135,25 @@ TILT_CLAMP = SPACER_T + 2.5                                  # spacer + 2.5 mm o
 STUB_BOLTS = [(-13.0, 0.0), (13.0, 0.0), (0.0, -13.0)]   # (x, z) around the tilt axis
 
 # ------------------------------------------------------------------ parts
+# servo driver board bay inside the base (static, under the deck, next to the pan servo).
+# Sized for boards up to 60 x 40 mm; the board is zip-tied between two ribs.
+BOARD_X, BOARD_Y, BOARD_Z = (-30.0, 30.0), (-90.0, -50.0), (26.0, 44.0)
+
 def base():
     deck = box((-100, -100, DECK_Z0), (100, 100, DECK_TOP))
     skirt = D(box((-100, -100, 0), (100, 100, DECK_Z0 + 0.01)), box((-94, -94, -1), (94, 94, DECK_Z0 + 1)))
     feet = [box((sx * 100 - (14 if sx > 0 else 0), sy * 100 - (14 if sy > 0 else 0), 0),
                 (sx * 100 + (0 if sx > 0 else 14), sy * 100 + (0 if sy > 0 else 14), DECK_Z0 + 0.01)) for sx in (-1, 1) for sy in (-1, 1)]
-    b = U(deck, skirt, *feet, W(sleeve(), PAN_M))
+    # servo driver board bay: two ribs hanging under the deck, board zip-tied between them
+    ribs = [box((x0, BOARD_Y[0] - 2, BOARD_Z[0] - 6), (x0 + 3, BOARD_Y[1] + 2, DECK_Z0 + 0.01))
+            for x0 in (BOARD_X[0] - 4, BOARD_X[1] + 1)]
+    b = U(deck, skirt, *feet, W(sleeve(), PAN_M), *ribs)
     cuts = [W(c, PAN_M) for c in sleeve_plate_cuts()]
     cuts += [cyl(2.3, (sx * 93, sy * 93, -1), (sx * 93, sy * 93, DECK_TOP + 1)) for sx in (-1, 1) for sy in (-1, 1)]   # M4 desk screws
-    cuts += [box((-30, -101, -1), (-6, -93, 14))]           # cable exit notch in the skirt
+    cuts += [box((BOARD_X[0], -101, -1), (BOARD_X[1], -93, 36))]                       # 12 V jack + USB + pan lead opening
+    cuts += [box((20, -9, DECK_Z0 - 1), (38, 9, DECK_TOP + 1))]                        # cable pass-through from the turntable
+    for y in (BOARD_Y[0] + 8, BOARD_Y[1] - 8):                                         # zip-tie holes under the board
+        cuts.append(box((BOARD_X[0] - 6, y - 2.5, BOARD_Z[0] - 4.5), (BOARD_X[1] + 6, y + 2.5, BOARD_Z[0] - 1.5)))
     return D(b, *cuts)
 
 def turntable():
@@ -161,7 +171,10 @@ def turntable():
         for x in (-22, 22):
             for yy in (A + 8, A + 22):
                 cuts.append(cyl(INSERT_D / 2, (x, sy * yy, TT_Z1 - INSERT_DEPTH), (x, sy * yy, TT_Z1 + 1), 24))
-    cuts.append(cyl(7, (-42, -A - 12, TT_Z0 - 1), (-42, -A - 12, TT_Z1 + 1)))          # tilt servo lead
+    # cables (tilt servo, laser, webcam) drop through the +x window into the 25 mm gap, where a slack loop
+    # inside r < 50 (clear of the rollers) takes up the pan rotation, then through the deck slot into the base.
+    for y in (-66, -58):                                                                 # zip-tie anchor along the cable path
+        cuts.append(box((14, y - 2, TT_Z0 - 1), (18, y + 2, TT_Z1 + 1)))
     for x0 in (-52, 30):
         cuts.append(box((x0, -24, TT_Z0 - 1), (x0 + 22, 24, TT_Z1 + 1)))                 # lightening, inside r 60
     return D(t, *cuts)
@@ -320,13 +333,14 @@ else:
     TILT_LIMIT = 40.0
 
 hardware = {"servo_pan": W(servo, PAN_M), "servo_tilt": W(servo, TILT_M), **PAYLOAD_HW,
+            "servo_board": box((BOARD_X[0] + 1, BOARD_Y[0] + 1, BOARD_Z[0]), (BOARD_X[1] - 1, BOARD_Y[1] - 1, BOARD_Z[1])),
             "bearing_tilt": W(bearing(), Tr((0, A + 1.0 + BRG_W / 2, ZT)) @ Rot(np.pi / 2, (1, 0, 0)))}
 for k, ang in enumerate(ROLL_ANG):
     hardware[f"bearing_roller_{k+1}"] = W(bearing(), roller_M(ang) @ Tr((0, 0, 2.0 + BRG_W / 2 + 0.2)))
 
 # groups for motion
 TILTING = {"cradle", "laser_plate", "shaft_washer", "horn_spacer", "stub_shaft"} | set(PAYLOAD_HW)
-STATIC = {"base", "pan_floor_cap", "servo_pan"}           # everything else pans
+STATIC = {"base", "pan_floor_cap", "servo_pan", "servo_board"}           # everything else pans
 
 # ------------------------------------------------------------------ screws: (name, part it passes, length, head point, axis, target)
 def screws():
