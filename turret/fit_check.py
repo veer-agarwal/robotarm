@@ -23,7 +23,9 @@ EXPECTED = set()
 
 log("== 1. Collisions at rest (pan 0, tilt 0) ==")
 bad = 0
+ALTERNATIVES = {frozenset(("future_pi5", "usb_hub"))}       # the Pi replaces the hub, never both
 for (n1, m1), (n2, m2) in itertools.combinations(allm.items(), 2):
+    if frozenset((n1, n2)) in ALTERNATIVES: continue
     v = inter_vol(m1, m2)
     if v > TOL:
         bad += 1; log(f"  COLLISION {n1} x {n2}: {v:.1f} mm3")
@@ -68,8 +70,10 @@ for k in (1, 2, 3):
     b = allm[f"bearing_roller_{k}"]
     log(f"  roller {k}: bottom {b.bounds[0][2]:.2f} vs deck top {T.DECK_TOP:.2f}  -> gap {b.bounds[0][2] - T.DECK_TOP:+.2f} mm "
         f"(top {b.bounds[1][2]:.2f} vs turntable underside {T.TT_Z0:.2f})")
-log(f"  pan: hub r{T.HUB_R} in deck window r{T.WIN_R} -> radial gap {T.WIN_R - T.HUB_R:.2f}; "
-    f"turntable underside {T.TT_Z0:.2f} vs deck top {T.DECK_TOP:.2f} -> {T.TT_Z0 - T.DECK_TOP:.2f} mm")
+log(f"  pan (flipped servo): fixed post neck r{T.HUB_R} in the sleeve plate's horn window r{T.WIN_R} -> radial gap {T.WIN_R - T.HUB_R:.2f}; "
+    f"post top = horn face z {T.PAN_HORN_Z:.2f}; turntable underside {T.TT_Z0:.2f} vs deck top {T.DECK_TOP:.2f} -> {T.TT_Z0 - T.DECK_TOP:.2f} mm")
+log(f"  hanging sleeve sweep r{np.hypot(T.SV_AX + T.SLV_HX, T.SLV_HY):.1f} in deck ring hole r{T.DECK_HOLE_R} ; "
+    f"rollers r68..76 inside channel wall r{T.CH_R0}")
 log(f"  tilt: ear outer face +-{T.YO:.1f} vs tower inner face +-{T.A:.1f} -> {T.A - T.YO:.2f} mm each side")
 log(f"  tilt idler: seat d{T.BRG_SEAT:.2f} on 6802 d24 (press), stub d{T.SHAFT_D:.2f} in d15 bore (slip), lip hole d17.5")
 log(f"  servo pockets: {2*T.SV_X:.1f} x {2*T.SV_Y:.1f} body in {2*(T.SV_X+T.C):.1f} x {2*(T.SV_Y+T.C):.1f} pocket")
@@ -130,4 +134,29 @@ log("  all screws: heads clear, shanks clear, tips engaged in inserts / horn thr
 log("  engagement (mm): " + ", ".join(sorted(set(f"{l} M3x{L}: {e}" for l, L, e in eng_log))))
 log("  screw count: " + ", ".join(f"{k} x{v}" for k, v in sorted(bom.items())))
 
+log("\n== 6. Stock servo leads (152 mm) to the board in the box ==")
+def plen(p): p = np.array(p, float); return float(np.sum(np.linalg.norm(np.diff(p, axis=0), axis=1)))
+pan_exit = (T.PAN_M @ [-2.0, 0, -T.SV_FACE - T.FCAP_T, 1])[:3]
+tilt_exit = (T.TILT_M @ [-2.0, 0, -T.SV_FACE - T.FCAP_T, 1])[:3]
+bx, by, bz = T.BOARD_BOX
+port_lo = (np.mean(bx), by[1], bz[0] + 3); port_hi = (np.mean(bx), by[1], bz[1] - 3)
+routes = {
+  "pan  lead: cap slot -> tray cutout -> under the Pi spot, past the Nano rails -> board (servo ports on its top edge)":
+      [pan_exit, pan_exit + (0, 0, 9), (6, -8, 99), (6, -20, 103), (10, -32, 118), (24, -35, 130), (bx[0] + 6, by[1] + 3, bz[1] - 3)],
+  "tilt lead: cap -> out past the sleeve (x 22) -> over the tower ribs -> -y wall notch -> board":
+      [tilt_exit, tilt_exit + (0, -2.5, 0), (22, tilt_exit[1] - 2.5, tilt_exit[2] - 5), (34, -48, T.EB_Z1 + 8),
+       (40, -T.EB_Y + 1, T.EB_Z1 - 2), (40, by[1] + 3, bz[1] - 3)],
+}
+for k, r in routes.items():
+    L = plen(r) * 1.15                                                     # +15% for bends
+    log(f"  {k}: {L:5.0f} mm with bends, {152 - L:+.0f} mm spare  {'OK' if L < 152 else 'TOO LONG'}")
+# the cable centre line must stay in free air (pan 0, tilt 0): sample every segment, skip the first/last 4 mm (exit + plug)
+pts = []
+for r in routes.values():
+    r = np.array(r, float)
+    for p0, p1 in zip(r[:-1], r[1:]):
+        for t in np.linspace(0, 1, 30): pts.append(p0 + t * (p1 - p0))
+    pts = [p for p in pts if np.linalg.norm(p - r[0]) > 4 and np.linalg.norm(p - r[-1]) > 4]
+ins, who = inside_any(np.array(pts), skip=("servo_board",))
+log("  cable centre lines clear of all parts" if not ins.any() else f"  cable runs through {set(w for w in who if w)}")
 open("fit_report.txt", "w").write("\n".join(rep) + "\n")

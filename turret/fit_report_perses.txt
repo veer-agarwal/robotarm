@@ -1,0 +1,29 @@
+== 1. Collisions at rest (pan 0, tilt 0) ==
+  OK, none
+
+== 2. Tilt sweep +-20 deg (tilting group vs everything else) ==
+  OK, nothing touches through the full tilt range
+  payload: perses, tilt limit +-20 deg, lowest tilting point z = 91.0  (turntable top 80.0, tower feet top 86.0)
+
+== 3. Pan sweep 0..345 deg (moving group vs base + pan cap + pan servo) ==
+  OK, free through 360
+
+== 4. Bearings and running gaps ==
+  roller 1: bottom 49.00 vs deck top 49.00  -> gap +0.00 mm (top 73.00 vs turntable underside 74.00)
+  roller 2: bottom 49.00 vs deck top 49.00  -> gap +0.00 mm (top 73.00 vs turntable underside 74.00)
+  roller 3: bottom 49.00 vs deck top 49.00  -> gap +0.00 mm (top 73.00 vs turntable underside 74.00)
+  pan (flipped servo): fixed post neck r13.0 in the sleeve plate's horn window r13.5 -> radial gap 0.50; post top = horn face z 45.40; turntable underside 74.00 vs deck top 49.00 -> 25.00 mm
+  hanging sleeve sweep r46.8 in deck ring hole r50.0 ; rollers r68..76 inside channel wall r79.0
+  tilt: ear outer face +-45.0 vs tower inner face +-46.7 -> 1.70 mm each side
+  tilt idler: seat d24.15 on 6802 d24 (press), stub d14.90 in d15 bore (slip), lip hole d17.5
+  servo pockets: 45.4 x 24.8 body in 45.9 x 25.3 pocket
+
+== 5. Screws ==
+  all screws: heads clear, shanks clear, tips engaged in inserts / horn threads
+  engagement (mm): base floor -> frame insert M3x6: 4.8, base post -> pan horn M3x6: 2.4, cradle ear + spacer -> tilt horn M3x8: 2.4, lid -> box insert M3x8: 5.0, pan_floor_cap -> sleeve insert M3x12: 4.8, pan_floor_cap -> sleeve insert M3x12: 4.9, roller axle -> post insert M3x12: 4.8, stub flange -> ear insert M3x8: 4.9, tilt_floor_cap -> sleeve insert M3x12: 4.8, tilt_floor_cap -> sleeve insert M3x12: 4.9, tower foot -> turntable M3x10: 4.8, tray + box -> turntable insert M3x20: 4.9, washer -> stub insert M3x6: 4.4
+  screw count: M3x10 x8, M3x12 x11, M3x20 x4, M3x6 x9, M3x8 x11
+
+== 6. Stock servo leads (152 mm) to the board in the box ==
+  pan  lead: cap slot -> tray cutout -> under the Pi spot, past the Nano rails -> board (servo ports on its top edge):   107 mm with bends, +45 mm spare  OK
+  tilt lead: cap -> out past the sleeve (x 22) -> over the tower ribs -> -y wall notch -> board:   131 mm with bends, +21 mm spare  OK
+  cable centre lines clear of all parts

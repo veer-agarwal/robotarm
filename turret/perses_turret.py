@@ -53,11 +53,25 @@ P_L, P_W, P_H, P_MASS = 560.0, 75.0, 115.0, 1.6
 DECK_Z0 = 45.0              # base deck underside = pan servo face
 DECK_T = PLATE_T
 DECK_TOP = DECK_Z0 + DECK_T                 # 49
-PAN_HORN_Z = DECK_Z0 + (HORN_FACE - SV_FACE)  # 47.7
 ROLL_Z = DECK_TOP + BRG_OD / 2              # roller centre: outer race on the deck
 TT_Z0 = ROLL_Z + BRG_OD / 2 + 1.0           # turntable underside (rollers hang from it)
 TT_T, TT_R = 6.0, 92.0
 TT_Z1 = TT_Z0 + TT_T
+# v2: pan servo flipped. Its body rides in a sleeve hanging under the turntable (floor cap on top, inside the
+# electronics box), its horn faces down onto a fixed post rising from the base floor.
+PAN_ZR = TT_Z1 - SV_FACE                    # servo-local z -> world z = PAN_ZR - z_local (cap seat at the turntable top)
+PAN_HORN_Z = PAN_ZR - HORN_FACE             # 45.4: horn face = top of the fixed post
+FLOOR_T = 5.0                               # base floor plate
+DECK_HOLE_R = 50.0                          # deck is a ring; the hanging sleeve sweeps r 46.8
+CH_R0, CH_R1, CH_TOP = 79.0, 99.0, 71.0     # cable channel on the deck, outside the rollers, under the turntable rim
+FRAME_SCREWS = [(sx * 97.0, sy * 60.0) for sx in (-1, 1) for sy in (-1, 1)]
+# electronics box between the towers (outer half sizes), tray it sits on, lid
+# x -21..80: the -x end stays under the Perses grip/trigger-guard sweep (z >= 163 there), the +x end is under the
+# barrel (z >= 187 for the laser plate at 40 deg, >= 204 for the Perses); y +-44 sits between the tower faces (+-46.7).
+EB_X0, EB_X1, EB_Y, EB_Z1, EW = -21.0, 80.0, 44.0, 155.0, 2.5
+EB_SCREWS = [(x, sy * (EB_Y - EW - 4)) for x in (EB_X0 + EW + 4, EB_X1 - EW - 4) for sy in (-1, 1)]   # (-14.5 | 73.5, +-37.5)
+TRAY_Z0, TRAY_Z1 = 92.0, 95.0
+LID_T = 2.5
 ROLL_R = 66.0                               # post face radius; bearing centre ~ r 70
 ROLL_ANG = (30, 150, 270)
 A = 46.7                                    # tower inner faces at y = +-A
@@ -123,8 +137,8 @@ def horn_bolt_cuts(top_local, cb_from_local):
     return cuts
 
 # ------------------------------------------------------------------ frames
-# pan servo: local z up, output on the world z axis, servo face against the deck underside
-PAN_M = Tr((-SV_AX, 0, DECK_Z0 - SV_FACE))
+# pan servo (v2, flipped): output axis on the world z axis pointing DOWN, floor cap up at the turntable top
+PAN_M = Tr((0, 0, PAN_ZR)) @ np.diag([-1.0, 1.0, -1.0, 1.0]) @ Tr((-SV_AX, 0, 0))   # body toward +x
 # tilt servo: local z -> world +y (horn points inward), local x -> world +z, local y -> world +x
 _R = np.eye(4); _R[:3, 0] = (0, 0, 1); _R[:3, 1] = (1, 0, 0); _R[:3, 2] = (0, 1, 0)
 TILT_M = Tr((0, -A - PLATE_T - SV_FACE, ZT)) @ _R @ Tr((-SV_AX, 0, 0))
@@ -135,49 +149,144 @@ TILT_CLAMP = SPACER_T + 2.5                                  # spacer + 2.5 mm o
 STUB_BOLTS = [(-13.0, 0.0), (13.0, 0.0), (0.0, -13.0)]   # (x, z) around the tilt axis
 
 # ------------------------------------------------------------------ parts
-# servo driver board bay inside the base (static, under the deck, next to the pan servo).
-# Sized for boards up to 60 x 40 mm; the board is zip-tied between two ribs.
-BOARD_X, BOARD_Y, BOARD_Z = (-30.0, 30.0), (-90.0, -50.0), (26.0, 44.0)
-
-def base():
-    deck = box((-100, -100, DECK_Z0), (100, 100, DECK_TOP))
-    skirt = D(box((-100, -100, 0), (100, 100, DECK_Z0 + 0.01)), box((-94, -94, -1), (94, 94, DECK_Z0 + 1)))
-    feet = [box((sx * 100 - (14 if sx > 0 else 0), sy * 100 - (14 if sy > 0 else 0), 0),
-                (sx * 100 + (0 if sx > 0 else 14), sy * 100 + (0 if sy > 0 else 14), DECK_Z0 + 0.01)) for sx in (-1, 1) for sy in (-1, 1)]
-    # servo driver board bay: two ribs hanging under the deck, board zip-tied between them
-    ribs = [box((x0, BOARD_Y[0] - 2, BOARD_Z[0] - 6), (x0 + 3, BOARD_Y[1] + 2, DECK_Z0 + 0.01))
-            for x0 in (BOARD_X[0] - 4, BOARD_X[1] + 1)]
-    b = U(deck, skirt, *feet, W(sleeve(), PAN_M), *ribs)
-    cuts = [W(c, PAN_M) for c in sleeve_plate_cuts()]
-    cuts += [cyl(2.3, (sx * 93, sy * 93, -1), (sx * 93, sy * 93, DECK_TOP + 1)) for sx in (-1, 1) for sy in (-1, 1)]   # M4 desk screws
-    cuts += [box((BOARD_X[0], -101, -1), (BOARD_X[1], -93, 36))]                       # 12 V jack + USB + pan lead opening
-    cuts += [box((20, -9, DECK_Z0 - 1), (38, 9, DECK_TOP + 1))]                        # cable pass-through from the turntable
-    for y in (BOARD_Y[0] + 8, BOARD_Y[1] - 8):                                         # zip-tie holes under the board
-        cuts.append(box((BOARD_X[0] - 6, y - 2.5, BOARD_Z[0] - 4.5), (BOARD_X[1] + 6, y + 2.5, BOARD_Z[0] - 1.5)))
+# v2 base: floor plate with the fixed pan post, frame (skirt + deck ring), cable channel ring on the deck.
+def base_floor():
+    fl = box((-100, -100, 0), (100, 100, FLOOR_T))
+    flange = cyl(26, (0, 0, FLOOR_T - 0.01), (0, 0, FLOOR_T + 4))
+    post_lo = cyl(18, (0, 0, FLOOR_T - 0.01), (0, 0, PAN_HORN_Z - 2.2))           # stays 1 mm under the sleeve plate
+    post_hi = cyl(HUB_R, (0, 0, PAN_HORN_Z - 2.3), (0, 0, PAN_HORN_Z))            # r13 neck inside the r13.5 horn window
+    b = U(fl, flange, post_lo, post_hi)
+    _, hc = hub_and_horn_cuts(PAN_ZR + 1.0)                                         # 4x M3x6 from below, counterbores open at the floor
+    cuts = [W(c, PAN_M) for c in hc]
+    for x, y in FRAME_SCREWS:
+        cuts += [cyl(M3_CLEAR / 2, (x, y, -1), (x, y, FLOOR_T + 1), 24), cyl(CB_D / 2, (x, y, -1), (x, y, FLOOR_T - 1.8), 24)]
+    cuts += [cyl(2.3, (sx * 93, sy * 93, -1), (sx * 93, sy * 93, FLOOR_T + 1)) for sx in (-1, 1) for sy in (-1, 1)]   # M4 desk screws
+    for sx in (-1, 1):                                                                   # lightening: border + cross ribs stay
+        for sy in (-1, 1):
+            q = box((min(sx * 14, sx * 84), min(sy * 14, sy * 84), -1), (max(sx * 14, sx * 84), max(sy * 14, sy * 84), FLOOR_T + 1))
+            cuts.append(D(q, cyl(32, (0, 0, -2), (0, 0, FLOOR_T + 2))))
     return D(b, *cuts)
 
+def base_frame():
+    deck = D(box((-100, -100, DECK_Z0), (100, 100, DECK_TOP)), cyl(DECK_HOLE_R, (0, 0, DECK_Z0 - 1), (0, 0, DECK_TOP + 1), 128))
+    skirt = D(box((-100, -100, FLOOR_T), (100, 100, DECK_Z0 + 0.01)), box((-96.5, -96.5, FLOOR_T - 1), (96.5, 96.5, DECK_Z0 + 1)))
+    feet = [box((sx * 100 - (14 if sx > 0 else 0), sy * 100 - (14 if sy > 0 else 0), FLOOR_T),
+                (sx * 100 + (0 if sx > 0 else 14), sy * 100 + (0 if sy > 0 else 14), DECK_Z0 + 0.01)) for sx in (-1, 1) for sy in (-1, 1)]
+    bosses = [box((x - 9 if x > 0 else x - 3, y - 6, FLOOR_T), (x + 3 if x > 0 else x + 9, y + 6, FLOOR_T + 12)) for x, y in FRAME_SCREWS]
+    b = U(deck, skirt, *feet, *bosses)
+    cuts = [cyl(2.3, (sx * 93, sy * 93, FLOOR_T - 1), (sx * 93, sy * 93, DECK_TOP + 1)) for sx in (-1, 1) for sy in (-1, 1)]
+    cuts += [cyl(INSERT_D / 2, (x, y, FLOOR_T - 1), (x, y, FLOOR_T + INSERT_DEPTH), 24) for x, y in FRAME_SCREWS]
+    cuts += [box((-101, -25, FLOOR_T - 1), (-93, 25, 36))]                              # 12 V + USB leave the base here (-x face)
+    cuts += [box((-96, -40, DECK_Z0 - 1), (-82, -24, DECK_TOP + 1))]                     # cables drop from the channel into the base
+    for ang in (0, 120, 240):                                                            # cable tray locating pegs
+        x, y = 89 * np.cos(np.radians(ang)), 89 * np.sin(np.radians(ang))
+        cuts.append(cyl(2.0, (x, y, DECK_Z0 - 1), (x, y, DECK_TOP + 1), 24))
+    return D(b, *cuts)
+
+def cable_tray():
+    """U-channel ring (r79..99) on the deck under the turntable rim: the 12 V + USB service loop lies here,
+    walled off from the rollers (r68..76) so it can't get caught when the turret pans."""
+    flo = D(cyl(CH_R1, (0, 0, DECK_TOP), (0, 0, DECK_TOP + 2), 180), cyl(CH_R0, (0, 0, DECK_TOP - 1), (0, 0, DECK_TOP + 3), 180))
+    inner = D(cyl(CH_R0 + 2, (0, 0, DECK_TOP), (0, 0, CH_TOP), 180), cyl(CH_R0, (0, 0, DECK_TOP - 1), (0, 0, CH_TOP + 1), 180))
+    outer = D(cyl(CH_R1, (0, 0, DECK_TOP), (0, 0, CH_TOP), 180), cyl(CH_R1 - 2, (0, 0, DECK_TOP - 1), (0, 0, CH_TOP + 1), 180))
+    pegs = []
+    for ang in (0, 120, 240):
+        x, y = 89 * np.cos(np.radians(ang)), 89 * np.sin(np.radians(ang))
+        pegs.append(cyl(1.9, (x, y, DECK_TOP - 3.5), (x, y, DECK_TOP + 0.01), 24))
+    return D(U(flo, inner, outer, *pegs), box((-96, -40, DECK_TOP - 1), (-82, -24, DECK_TOP + 3)))
+
 def turntable():
+    """Disc + the flipped pan servo's sleeve hanging underneath (plate with the horn window at the bottom),
+    3 roller posts, tower inserts, electronics box inserts, cable slot to the channel at the rim (180 deg)."""
     tt = cyl(TT_R, (0, 0, TT_Z0), (0, 0, TT_Z1), 160)
-    hub, hcuts = hub_and_horn_cuts(HORN_FACE + (TT_Z1 - PAN_HORN_Z))
-    posts = []
-    pcuts = []
+    plate = box((-SLV_HX, -SLV_HY, SV_FACE - 0.01), (SLV_HX, SLV_HY, SV_FACE + PLATE_T))
+    posts, pcuts = [], []
     for ang in ROLL_ANG:
         Rz = Rot(np.radians(ang), (0, 0, 1))
         p = box((ROLL_R - 12, -8, ROLL_Z - 8), (ROLL_R, 8, TT_Z0 + 0.01)); posts.append(W(p, Rz))
         pcuts.append(W(cyl(INSERT_D / 2, (ROLL_R - INSERT_DEPTH, 0, ROLL_Z), (ROLL_R + 1, 0, ROLL_Z), 24), Rz))
-    t = U(tt, W(hub, PAN_M), *posts)
-    cuts = [W(c, PAN_M) for c in hcuts] + pcuts
+    t = U(tt, W(sleeve(), PAN_M), W(plate, PAN_M), *posts)
+    cuts = [W(c, PAN_M) for c in sleeve_plate_cuts()] + pcuts
+    cuts.append(W(box((-SV_X - C, -SV_Y - C, -SV_FACE - 1), (SV_X + C, SV_Y + C, SV_FACE)), PAN_M))   # servo drops in from the top
+    cuts += [W(cyl(INSERT_D / 2, (x, y, -SV_FACE - 1), (x, y, -SV_FACE + INSERT_DEPTH), 24), PAN_M) for x, y in INS_XY]  # cap inserts
     for sy in (-1, 1):
         for x in (-22, 22):
             for yy in (A + 8, A + 22):
                 cuts.append(cyl(INSERT_D / 2, (x, sy * yy, TT_Z1 - INSERT_DEPTH), (x, sy * yy, TT_Z1 + 1), 24))
-    # cables (tilt servo, laser, webcam) drop through the +x window into the 25 mm gap, where a slack loop
-    # inside r < 50 (clear of the rollers) takes up the pan rotation, then through the deck slot into the base.
-    for y in (-66, -58):                                                                 # zip-tie anchor along the cable path
-        cuts.append(box((14, y - 2, TT_Z0 - 1), (18, y + 2, TT_Z1 + 1)))
-    for x0 in (-52, 30):
-        cuts.append(box((x0, -24, TT_Z0 - 1), (x0 + 22, 24, TT_Z1 + 1)))                 # lightening, inside r 60
+    cuts += [cyl(INSERT_D / 2, (x, y, TT_Z1 - INSERT_DEPTH), (x, y, TT_Z1 + 1), 24) for x, y in EB_SCREWS]
+    cuts.append(box((-84, -33, TT_Z0 - 1), (-77, -25, TT_Z1 + 1)))                       # 12 V + USB down to the channel
+    for lo, hi in (((50, -24), (66, 24)), ((-72, -20), (-62, 8))):   # lightening (clear of posts + inserts)
+        cuts.append(box((lo[0], lo[1], TT_Z0 - 1), (hi[0], hi[1], TT_Z1 + 1)))
+    for y in (-37, -24):                                                                 # zip-tie strain relief next to it
+        cuts.append(box((-73, y, TT_Z0 - 1), (-70, y + 3, TT_Z1 + 1)))
     return D(t, *cuts)
+
+# electronics box: between the towers, on the turntable. Interior 96 x 83, 57 mm above the tray.
+BOARD_BOX = ((26.0, 68.0), (-EB_Y + EW, -EB_Y + EW + 14.0), (117.0, 150.0))   # Bus Servo Adapter (A), 42 x 33, on the -y wall, servo ports up
+XI0, XI1, YI_ = EB_X0 + EW, EB_X1 - EW, EB_Y - EW                               # interior
+def ebox():
+    shell = D(box((EB_X0, -EB_Y, TT_Z1), (EB_X1, EB_Y, EB_Z1)), box((XI0, -YI_, TT_Z1 - 1), (XI1, YI_, EB_Z1 + 1)))
+    lo = [box((x - 4, y - 4, TT_Z1), (x + 4, y + 4, TRAY_Z0)) for x, y in EB_SCREWS]          # tray seats + box screws
+    hi = [box((x - 4, y - 4, EB_Z1 - 8), (x + 4, y + 4, EB_Z1)) for x, y in EB_SCREWS]         # lid inserts
+    for x, y in EB_SCREWS:                                                                     # 45 deg gussets: printable without supports
+        xc, yc = (XI0 if x < 0 else XI1), (-YI_ if y < 0 else YI_)
+        sx, sy = (1 if x < 0 else -1), (1 if y < 0 else -1)
+        z0 = EB_Z1 - 8
+        pts = [(x + dx, y + dy, z0 + 0.01) for dx in (-4, 4) for dy in (-4, 4)]
+        pts += [(xc, yc, z0 - 8), (xc + sx * 8, yc, z0 - 8), (xc, yc + sy * 8, z0 - 8), (xc - sx * 0.5, yc - sy * 0.5, z0 - 8),
+                (xc + sx * 8, yc - sy * 0.5, z0 - 8), (xc - sx * 0.5, yc + sy * 8, z0 - 8)]
+        hi.append(trimesh.convex.convex_hull(np.array(pts)))
+    b = U(shell, *lo, *hi)
+    cuts = [cyl(M3_CLEAR / 2, (x, y, TT_Z1 - 1), (x, y, TRAY_Z0 + 1), 24) for x, y in EB_SCREWS]
+    cuts += [cyl(INSERT_D / 2, (x, y, EB_Z1 - INSERT_DEPTH), (x, y, EB_Z1 + 1), 24) for x, y in EB_SCREWS]
+    cuts += [cyl(3.25, (XI1 - 1, 22, 125), (EB_X1 + 1, 22, 125), 32),                          # laser ARM switch (6 mm toggle)
+             cyl(3.25, (XI1 - 1, -22, 125), (EB_X1 + 1, -22, 125), 32)]                        # spare (button / LED / Nerf arm)
+    cuts.append(box((EB_X0 - 1, -38, TRAY_Z1 + 1), (XI0 + 1, -22, TRAY_Z1 + 15)))            # 12 V + USB out (-x wall, y -30 side)
+    cuts.append(box((32, -EB_Y - 1, EB_Z1 - 8), (54, -YI_ + 1, EB_Z1 + 1)))                  # tilt servo lead in (-y wall top)
+    for k in range(7):                                                                         # vents, +y wall
+        x = -10 + 13 * k
+        cuts.append(box((x - 2, YI_ - 1, 108), (x + 2, EB_Y + 1, 146)))
+    for x in (24.0, 70.0):                                                                     # board zip-tie slots (-y wall)
+        for z in (122.0, 140.0):
+            cuts.append(box((x - 1.5, -EB_Y - 1, z), (x + 1.5, -YI_ + 1, z + 4)))
+    return D(b, *cuts)
+
+PI_C = (28.5, 12.5)                                     # future Pi 5 hole pattern centre on the tray (58 x 49, M2.5)
+NANO_X, NANO_Y = (8.0, 53.0), -28.0
+def tray():
+    t = box((XI0 + 0.4, -YI_ + 0.4, TRAY_Z0), (XI1 - 0.4, YI_ - 0.4, TRAY_Z1))
+    rails = [box((NANO_X[0], NANO_Y + s * 9.2 - (3 if s < 0 else 0), TRAY_Z1 - 0.01), (NANO_X[1], NANO_Y + s * 9.2 + (3 if s > 0 else 0), TRAY_Z1 + 10))
+             for s in (-1, 1)]
+    t = U(t, *rails)
+    cuts = [cyl(M3_CLEAR / 2, (x, y, TRAY_Z0 - 1), (x, y, TRAY_Z1 + 1), 24) for x, y in EB_SCREWS]
+    cuts += [box((NANO_X[0] - 1, NANO_Y - 9.2, TRAY_Z1 + 7), (NANO_X[1] + 1, NANO_Y + 9.2, TRAY_Z1 + 8.8)),   # PCB grooves (1.8)
+             box((NANO_X[0] - 1, NANO_Y - 8.6, TRAY_Z1), (NANO_X[1] + 1, NANO_Y + 8.6, TRAY_Z1 + 11))]       # between the rails
+    cuts.append(box((4, -13, TRAY_Z0 - 1), (25, 13, TRAY_Z1 + 1)))                      # pan servo lead comes up here
+    for dx in (-29, 29):
+        for dy in (-24.5, 24.5):
+            cuts.append(cyl(1.35, (PI_C[0] + dx, PI_C[1] + dy, TRAY_Z0 - 1), (PI_C[0] + dx, PI_C[1] + dy, TRAY_Z1 + 1), 16))
+    for x in (40.0, 66.0):                                                               # zip-tie slots: USB hub (where the Pi goes later)
+        for y in (-6.0, 30.0):
+            cuts.append(box((x - 1.5, y - 2, TRAY_Z0 - 1), (x + 1.5, y + 2, TRAY_Z1 + 1)))
+    for y in (-37.0, -21.0):                                                             # zip-tie slots: transistor perfboard
+        for x in (-16.0, 4.0):
+            cuts.append(box((x - 1.5, y - 2, TRAY_Z0 - 1), (x + 1.5, y + 2, TRAY_Z1 + 1)))
+    return D(t, *cuts)
+
+def lid():
+    p = box((EB_X0, -EB_Y, EB_Z1), (EB_X1, EB_Y, EB_Z1 + LID_T))
+    lip = D(box((XI0 + 0.3, -YI_ + 0.3, EB_Z1 - 2), (XI1 - 0.3, YI_ - 0.3, EB_Z1 + 0.01)),
+            box((XI0 + 2.3, -YI_ + 2.3, EB_Z1 - 3), (XI1 - 2.3, YI_ - 2.3, EB_Z1 + 1)))
+    lip = D(lip, *[box((x - 4.5, y - 4.5, EB_Z1 - 3), (x + 4.5, y + 4.5, EB_Z1 + 1)) for x, y in EB_SCREWS],
+            box((32, -EB_Y - 1, EB_Z1 - 4), (54, -YI_ + 2.5, EB_Z1 + 0.01)))
+    l = U(p, lip)
+    cuts = [cyl(M3_CLEAR / 2, (x, y, EB_Z1 - 1), (x, y, EB_Z1 + LID_T + 1), 24) for x, y in EB_SCREWS]
+    for k in range(8):                                                                   # vent slots over the Pi / hub
+        x = 20 + 7 * k
+        cuts.append(box((x - 1.5, -8, EB_Z1 - 3), (x + 1.5, 34, EB_Z1 + LID_T + 1)))
+    cuts += [cyl(5.0, (-8, 32, EB_Z1 - 3), (-8, 32, EB_Z1 + LID_T + 1), 32),           # webcam USB in
+             cyl(4.0, (14, 32, EB_Z1 - 3), (14, 32, EB_Z1 + LID_T + 1), 32)]           # laser leads in
+    return D(l, *cuts)
 
 def roller_axle():
     """flange d17 x 2 (inner race only), stub d14.9 x 5.4, M3 through. Local z = radial outward."""
@@ -311,7 +420,12 @@ def bearing():
 servo = trimesh.load(SERVO_STL); servo.apply_scale(1000.0)
 
 parts = {
-    "base": base(),
+    "base_floor": base_floor(),
+    "base_frame": base_frame(),
+    "cable_tray": cable_tray(),
+    "ebox": ebox(),
+    "ebox_tray": tray(),
+    "ebox_lid": lid(),
     "pan_floor_cap": W(floor_cap(), PAN_M),
     "turntable": turntable(),
     "tower_servo": tower_servo(),
@@ -333,14 +447,17 @@ else:
     TILT_LIMIT = 40.0
 
 hardware = {"servo_pan": W(servo, PAN_M), "servo_tilt": W(servo, TILT_M), **PAYLOAD_HW,
-            "servo_board": box((BOARD_X[0] + 1, BOARD_Y[0] + 1, BOARD_Z[0]), (BOARD_X[1] - 1, BOARD_Y[1] - 1, BOARD_Z[1])),
+            "servo_board": box((BOARD_BOX[0][0], BOARD_BOX[1][0] + 0.2, BOARD_BOX[2][0]), (BOARD_BOX[0][1], BOARD_BOX[1][1], BOARD_BOX[2][1])),
+            "arduino_nano": box((NANO_X[0] + 0.5, NANO_Y - 9.0, TRAY_Z1 + 2.0), (NANO_X[1] - 0.5, NANO_Y + 9.0, TRAY_Z1 + 8.6)),
+            "usb_hub": box((42.0, -6.0, TRAY_Z1 + 0.2), (64.0, 30.0, TRAY_Z1 + 12.0)),
+            "future_pi5": box((PI_C[0] - 42.5, PI_C[1] - 28.0, TRAY_Z1 + 10.0), (PI_C[0] + 42.5, PI_C[1] + 28.0, TRAY_Z1 + 10.0 + 30.0)),   # on 10 mm standoffs, with Active Cooler
             "bearing_tilt": W(bearing(), Tr((0, A + 1.0 + BRG_W / 2, ZT)) @ Rot(np.pi / 2, (1, 0, 0)))}
 for k, ang in enumerate(ROLL_ANG):
     hardware[f"bearing_roller_{k+1}"] = W(bearing(), roller_M(ang) @ Tr((0, 0, 2.0 + BRG_W / 2 + 0.2)))
 
 # groups for motion
 TILTING = {"cradle", "laser_plate", "shaft_washer", "horn_spacer", "stub_shaft"} | set(PAYLOAD_HW)
-STATIC = {"base", "pan_floor_cap", "servo_pan", "servo_board"}           # everything else pans
+STATIC = {"base_floor", "base_frame", "cable_tray"}           # everything else pans (v2: the pan servo body turns too)
 
 # ------------------------------------------------------------------ screws: (name, part it passes, length, head point, axis, target)
 def screws():
@@ -351,11 +468,17 @@ def screws():
             head = (M @ [x, y, -SV_FACE - FCAP_T, 1])[:3]; ax = M[:3, :3] @ [0, 0, 1]
             S.append((f"{capname} -> sleeve insert", 12, head, ax, "insert"))
     # turntable hub -> pan horn, tilt hub -> tilt horn: M3x6, 3.5 clamp
-    for label, M, clamp, L in (("turntable hub -> pan horn", PAN_M, HORN_CLAMP, 6), ("cradle ear + spacer -> tilt horn", TILT_M, TILT_CLAMP, 8)):
+    for label, M, clamp, L in (("base post -> pan horn", PAN_M, HORN_CLAMP, 6), ("cradle ear + spacer -> tilt horn", TILT_M, TILT_CLAMP, 8)):
         for dx in (-HP, HP):
             for dy in (-HP, HP):
                 head = (M @ [SV_AX + dx, dy, HORN_FACE + clamp, 1])[:3]; ax = M[:3, :3] @ [0, 0, -1]
                 S.append((label, L, head, ax, "horn"))
+    # v2: base floor -> frame inserts (M3x6), box + tray -> turntable inserts (M3x20), lid -> box inserts (M3x8)
+    for x, y in FRAME_SCREWS:
+        S.append(("base floor -> frame insert", 6, np.array([x, y, FLOOR_T - 1.8]), np.array([0, 0, 1.0]), "insert"))
+    for x, y in EB_SCREWS:
+        S.append(("tray + box -> turntable insert", 20, np.array([x, y, TRAY_Z1]), np.array([0, 0, -1.0]), "insert"))
+        S.append(("lid -> box insert", 8, np.array([x, y, EB_Z1 + LID_T]), np.array([0, 0, -1.0]), "insert"))
     # stub shaft flange -> left ear inserts: flange 4 + 4 = M3x8
     for x, z in STUB_BOLTS:
         S.append(("stub flange -> ear insert", 8, np.array([x, YI - 4, ZT + z]), np.array([0, 1.0, 0]), "insert"))
@@ -379,8 +502,10 @@ if __name__ == "__main__":
         parts_export = dict(parts); parts_export["cradle"] = cradle()
     else:
         parts_export = dict(parts)
-    orient = {"base": Rot(np.pi, (1, 0, 0)),                    # deck on the bed, sleeve + skirt up
-              "turntable": Rot(np.pi, (1, 0, 0)),               # top on the bed, hub + posts up
+    orient = {"base_frame": Rot(np.pi, (1, 0, 0)),              # deck on the bed, skirt up
+              "turntable": Rot(np.pi, (1, 0, 0)),               # top on the bed, sleeve + posts up
+              "ebox_lid": Rot(np.pi, (1, 0, 0)),                # top on the bed, lip up
+              "cable_tray": Rot(np.pi, (1, 0, 0)),              # wall tops on the bed, pegs up
               "tower_servo": Rot(-np.pi / 2, (1, 0, 0)),        # inner face on the bed, sleeve up
               "tower_bearing": Rot(np.pi / 2, (1, 0, 0)),       # inner face on the bed
               "cradle": Rot(np.pi, (1, 0, 0)),                   # upside down: wall tops on the bed, ears up
