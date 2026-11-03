@@ -30,8 +30,8 @@ M3_CLEAR, M3_HEAD_D, M3_HEAD_H = 3.4, 5.5, 3.0
 CB_D = M3_HEAD_D + 0.6      # counterbore
 INSERT_D, INSERT_DEPTH, INSERT_LEN = 4.0, 6.0, 5.0
 BRG_OD, BRG_ID, BRG_W = 24.0, 15.0, 5.0
-BRG_SEAT = BRG_OD + 0.15
-SHAFT_D = BRG_ID - 0.1
+BRG_SEAT = BRG_OD + 0.10          # P2S + PLA fit coupon (11/3): 24.10 press fit
+SHAFT_D = BRG_ID + 0.0           # P2S + PLA fit coupon (11/3): 15.0 snug slide
 
 # STS3215, servo-local frame (official model): body x +-22.7, y +-12.4, faces z +-15.9; output axis at
 # x = 12.5; horn face z = 18.6 with 4x M3 at (+-4.95, +-4.95) from the axis; centre screw head to z 20.2.

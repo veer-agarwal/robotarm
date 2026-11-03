@@ -49,7 +49,7 @@ The v1 design (servo board under the deck) is kept as `perses_turret_v1.py`.
 | servo_floor_cap_x2.stl | 2 | flat | 40% | |
 | stub_shaft, horn_spacer, roller_axle_x3, shaft_washer | 1/1/3/1 | flange or flat down | 100% | |
 
-Press fits: bearing seat d24.15, shaft d14.9. If your printer runs tight, change `BRG_SEAT` / `SHAFT_D` in the
+Press fits: bearing seat d24.10, shaft d15.0 (set from the P2S + PLA fit coupon, stl/turret/fit_coupon_p2s.stl). If your printer runs tight, change `BRG_SEAT` / `SHAFT_D` in the
 script, not in the slicer.
 
 ## Hardware
