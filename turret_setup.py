@@ -8,6 +8,8 @@ and the 12 V supply on. New servos all ship as ID 1, so plug in ONE servo at a t
     python turret_setup.py assign --port COM9 --to 7  ONE servo plugged in: change its ID to 7
     python turret_setup.py center --port COM9 --id 7  move slowly to the middle (2048) and hold
     python turret_setup.py wiggle --port COM9 --id 7  small back-and-forth test, ends centred
+    python turret_setup.py limits --port COM9         save the angle limits IN the servos (pan +-120, tilt +-40)
+    python turret_setup.py test   --port COM9         slow pan + tilt sweep, Enter between steps, stops on a snag
 
 Fit the horn (and later the turntable or the tilt hinge) while the servo is held at centre.
 Ctrl+C at any time turns torque off.
@@ -18,7 +20,10 @@ import serial  # pyserial, already in the lerobot env
 BAUD = 1_000_000
 ADDR_ID, ADDR_TORQUE, ADDR_ACC, ADDR_GOAL, ADDR_SPEED, ADDR_LOCK = 5, 40, 41, 42, 46, 55
 ADDR_POS, ADDR_VOLT, ADDR_TEMP = 56, 62, 63
+ADDR_MIN_LIM, ADDR_MAX_LIM, ADDR_LOAD = 9, 11, 60
 CENTRE = 2048
+STEPS_PER_DEG = 4096 / 360
+PAN_ID, TILT_ID = 7, 8
 PING, READ, WRITE = 0x01, 0x02, 0x03
 
 
@@ -93,12 +98,60 @@ def move(bus, sid, target, speed=600):
     return bus.read(sid, ADDR_POS, 2)
 
 
+def set_limits(bus, sid, deg):
+    """Write min/max angle limits to the servo's EEPROM: it refuses any goal outside them, whatever program sends it."""
+    lo, hi = CENTRE - round(deg * STEPS_PER_DEG), CENTRE + round(deg * STEPS_PER_DEG)
+    bus.write(sid, ADDR_TORQUE, 0)
+    bus.write(sid, ADDR_LOCK, 0)                 # unlock EEPROM
+    bus.write(sid, ADDR_MIN_LIM, lo, 2)
+    bus.write(sid, ADDR_MAX_LIM, hi, 2)
+    time.sleep(0.05)
+    bus.write(sid, ADDR_LOCK, 1)                 # lock (saved through power cycles)
+    return bus.read(sid, ADDR_MIN_LIM, 2), bus.read(sid, ADDR_MAX_LIM, 2)
+
+
+def move_watch(bus, sid, target, speed=150, max_load=450):
+    """Slow move that stops where it is if the servo strains (a snagged cable, a part hitting something)."""
+    bus.write(sid, ADDR_ACC, 10)
+    bus.write(sid, ADDR_SPEED, speed, 2)
+    bus.write(sid, ADDR_TORQUE, 1)
+    start = bus.read(sid, ADDR_POS, 2) or target
+    bus.write(sid, ADDR_GOAL, target, 2)
+    t_end = time.time() + abs(target - start) / speed + 2.5
+    while time.time() < t_end:
+        time.sleep(0.05)
+        p, ld = bus.read(sid, ADDR_POS, 2), bus.read(sid, ADDR_LOAD, 2)
+        if ld is not None and (ld & 0x3FF) > max_load:      # 0.1 % units, bit 10 is direction
+            if p is not None:
+                bus.write(sid, ADDR_GOAL, p, 2)              # hold here, don't keep pushing
+            return p, f"STOPPED: load {(ld & 0x3FF) / 10:.0f} %"
+        if p is not None and abs(p - target) < 8:
+            return p, "ok"
+    return bus.read(sid, ADDR_POS, 2), "STOPPED: didn't reach the target"
+
+
+def sweep(bus, sid, name, steps_deg):
+    print(f"\n{name} (ID {sid}). Watch the cables. Enter = next step, q + Enter = stop.")
+    for d in steps_deg:
+        if input(f"  next: {name} to {d:+d} deg ").strip().lower() == "q":
+            break
+        p, status = move_watch(bus, sid, CENTRE + round(d * STEPS_PER_DEG))
+        print(f"    at {(p - CENTRE) / STEPS_PER_DEG:+.1f} deg  {status}" if p is not None else f"    {status}")
+        if status != "ok":
+            print("    Check for a snagged cable or something touching, then rerun.")
+            return False
+    move_watch(bus, sid, CENTRE)
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["ports", "scan", "assign", "center", "wiggle"])
+    ap.add_argument("cmd", choices=["ports", "scan", "assign", "center", "wiggle", "limits", "test"])
     ap.add_argument("--port")
     ap.add_argument("--to", type=int, help="new ID for assign (7 = pan, 8 = tilt)")
     ap.add_argument("--id", type=int, help="servo ID for center / wiggle")
+    ap.add_argument("--pan-max", type=int, default=120, help="pan limit, deg each way (cable loop: max 120)")
+    ap.add_argument("--tilt-max", type=int, default=40, help="tilt limit, deg each way (40 laser plate, 20 Perses)")
     a = ap.parse_args()
 
     if a.cmd == "ports":
@@ -132,6 +185,33 @@ def main():
             print(f"ID {old} -> {a.to}: {'done' if ok else 'FAILED, rerun scan'}")
             if ok:
                 print("Label this servo, e.g. tape marked PAN 7 / TILT 8.")
+        elif a.cmd == "limits":
+            for sid_, deg in ((PAN_ID, min(a.pan_max, 120)), (TILT_ID, a.tilt_max)):
+                if not bus.ping(sid_):
+                    print(f"  ID {sid_} not found, skipped"); continue
+                lo, hi = set_limits(bus, sid_, deg)
+                print(f"  ID {sid_}: limits {lo}..{hi} (+-{deg} deg from centre), saved in the servo")
+            print("The servos now refuse to move past these, even if a script asks them to.")
+        elif a.cmd == "test":
+            ids = [i for i in (PAN_ID, TILT_ID) if bus.ping(i)]
+            if not ids:
+                sys.exit("No turret servos found (IDs 7, 8). Run scan.")
+            for i in ids:
+                lo, hi = bus.read(i, ADDR_MIN_LIM, 2), bus.read(i, ADDR_MAX_LIM, 2)
+                if (lo, hi) == (0, 4095) or lo is None:
+                    print(f"  ID {i} has no angle limits yet: run 'limits' first (recommended).")
+            sid = ids[0]
+            print("Both servos go to centre first, slowly.")
+            for i in ids:
+                move_watch(bus, i, CENTRE)
+            ok = True
+            if TILT_ID in ids:
+                t = a.tilt_max
+                ok = sweep(bus, TILT_ID, "TILT", [s_ * d for d in (10, 20, 30, t) if d <= t for s_ in (1, -1)])
+            if ok and PAN_ID in ids:
+                m = min(a.pan_max, 120)
+                sweep(bus, PAN_ID, "PAN", [s_ * d for d in (30, 60, 90, m) if d <= m for s_ in (1, -1)])
+            input("\nBack at centre. Press Enter to release (torque off: the tilt will sag a little)...")
         elif a.cmd in ("center", "wiggle"):
             if a.id is None:
                 sys.exit("Give --id 7 or --id 8.")
@@ -149,8 +229,9 @@ def main():
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        if sid is not None:
-            try: bus._tx(sid, WRITE, [ADDR_TORQUE, 0])
+        for i in ({sid} if a.cmd != "test" else {PAN_ID, TILT_ID}):
+            if i is None: continue
+            try: bus._tx(i, WRITE, [ADDR_TORQUE, 0])
             except Exception: pass
         bus.close()
 
