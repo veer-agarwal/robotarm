@@ -6,8 +6,8 @@ Drive the turret with the Xbox controller: pan, tilt and the laser, with the web
     Y                 : ARM / disarm the laser                 RT (hold)   : laser ON while armed
     Back / Start      : flip pan / tilt direction              B           : quit (laser off, torque off)
 
-Usage:  turret_teleop.bat --port COM9 --laser COM10 [--cam 0]
-        --laser and --cam are optional (leave --laser out to drive without the laser, --cam -1 for no camera).
+Usage:  turret_teleop.bat --port COM9 --laser COM11 [--cam 0]
+        --laser and --cam are optional: no --cam = no camera window feed (a status screen instead).
 Limits: the ones you taught with turret_setup.bat teach (turret_limits.json), else pan +-120, tilt +-40.
 Ctrl+C / closing the window / B all stop it; the ESP32 turns the laser off by itself 0.5 s after the PC goes quiet.
 """
@@ -62,7 +62,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", required=True, help="turret servo board (CH343), e.g. COM9")
     ap.add_argument("--laser", help="ESP32 running turret_laser.ino, e.g. COM10 (optional)")
-    ap.add_argument("--cam", type=int, default=0, help="webcam index, -1 for none")
+    ap.add_argument("--cam", type=int, default=-1, help="webcam index (e.g. 0); default: no camera")
     ap.add_argument("--width", type=int, default=640); ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--exposure", type=float, default=-5)
     ap.add_argument("--flip-pan", action="store_true"); ap.add_argument("--flip-tilt", action="store_true")
@@ -77,7 +77,12 @@ def main():
     lim = load_limits()
     servos = Servos(a.port)
     laser = Laser(a.laser) if a.laser else None
-    cap = open_camera(a.cam, a.width, a.height, 30, a.exposure) if a.cam >= 0 else None
+    cap = None
+    if a.cam >= 0:
+        try:
+            cap = open_camera(a.cam, a.width, a.height, 30, a.exposure)
+        except SystemExit as e:
+            print(f"{e}\nNo camera: carrying on without it.")
 
     print("Gliding to centre...")
     for sid in (PAN_ID, TILT_ID):
