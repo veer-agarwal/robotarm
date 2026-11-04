@@ -24,6 +24,24 @@ PAN_ID, TILT_ID = 7, 8
 PAN_LIM, TILT_LIM = 120.0, 40.0      # degrees either side of centre (cable loop / payload clearance)
 
 
+LIMITS = {}
+
+
+def load_limits():
+    """Limits taught with turret_setup.py teach (turret_limits.json, servo ticks); else the defaults above."""
+    import json
+    rng = {PAN_ID: (-PAN_LIM, PAN_LIM), TILT_ID: (-TILT_LIM, TILT_LIM)}
+    try:
+        d = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "turret_limits.json")))
+        for sid in rng:
+            if str(sid) in d:
+                lo, hi = d[str(sid)]
+                rng[sid] = ((lo - CENTRE) / TPD + 0.5, (hi - CENTRE) / TPD - 0.5)
+    except Exception:
+        pass
+    return rng
+
+
 def make_tracker():
     for mod in (cv2, getattr(cv2, "legacy", None)):
         if mod is None:
@@ -104,6 +122,9 @@ def main():
     ap.add_argument("--mode", choices=["fixed", "follow"], default="fixed")
     ap.add_argument("--kp", type=float, default=0.35, help="follow mode: fraction of the error corrected per frame")
     a = ap.parse_args()
+    global LIMITS
+    LIMITS = load_limits()
+    print(f"limits: pan {LIMITS[PAN_ID][0]:+.0f}..{LIMITS[PAN_ID][1]:+.0f} deg, tilt {LIMITS[TILT_ID][0]:+.0f}..{LIMITS[TILT_ID][1]:+.0f} deg")
 
     cap = open_camera(a.cam, a.width, a.height, a.fps, a.exposure)
     servos = Servos(a.port) if a.port else None
@@ -143,7 +164,7 @@ def main():
                         pan += np.clip(pan_sign * a.kp * ex, -4, 4)
                         tilt += np.clip(tilt_sign * a.kp * ey, -4, 4)
                         locked = abs(ex) < 2.0 and abs(ey) < 2.0
-                    pan = float(np.clip(pan, -PAN_LIM, PAN_LIM)); tilt = float(np.clip(tilt, -TILT_LIM, TILT_LIM))
+                    pan = float(np.clip(pan, *LIMITS[PAN_ID])); tilt = float(np.clip(tilt, *LIMITS[TILT_ID]))
                     if servos: servos.goto(pan, tilt)
                     cv2.rectangle(frame, box[:2], (box[0] + box[2], box[1] + box[3]), (0, 255, 0) if locked else (0, 200, 255), 2)
                 else:

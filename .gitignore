@@ -4,3 +4,4 @@ outputs/
 *.mp4
 recordings/
 datasets/
+turret_limits.json

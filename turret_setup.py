@@ -9,12 +9,13 @@ and the 12 V supply on. New servos all ship as ID 1, so plug in ONE servo at a t
     python turret_setup.py center --port COM9 --id 7  move slowly to the middle (2048) and hold
     python turret_setup.py wiggle --port COM9 --id 7  small back-and-forth test, ends centred
     python turret_setup.py limits --port COM9         save the angle limits IN the servos (pan +-120, tilt +-40)
+    python turret_setup.py teach  --port COM9         jog to your own left/right and up/down limits, save them in the servos
     python turret_setup.py test   --port COM9         slow pan + tilt sweep, Enter between steps, stops on a snag
 
 Fit the horn (and later the turntable or the tilt hinge) while the servo is held at centre.
 Ctrl+C at any time turns torque off.
 """
-import argparse, sys, time
+import argparse, json, os, sys, time
 import serial  # pyserial, already in the lerobot env
 
 BAUD = 1_000_000
@@ -130,6 +131,80 @@ def move_watch(bus, sid, target, speed=150, max_load=450):
     return bus.read(sid, ADDR_POS, 2), "STOPPED: didn't reach the target"
 
 
+LIMITS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "turret_limits.json")
+
+
+def write_limits(bus, sid, lo, hi):
+    bus.write(sid, ADDR_TORQUE, 0)
+    bus.write(sid, ADDR_LOCK, 0)
+    bus.write(sid, ADDR_MIN_LIM, lo, 2)
+    bus.write(sid, ADDR_MAX_LIM, hi, 2)
+    time.sleep(0.05)
+    bus.write(sid, ADDR_LOCK, 1)
+    return bus.read(sid, ADDR_MIN_LIM, 2), bus.read(sid, ADDR_MAX_LIM, 2)
+
+
+def getkey():
+    try:
+        import msvcrt                      # Windows: single key presses
+        return msvcrt.getwch()
+    except ImportError:
+        return (input() or "\r")[0]       # elsewhere: type the key + Enter
+
+
+def jog_to(bus, sid, minus, plus, label):
+    """Jog with the keys (lower case 2 deg, upper case 10 deg); Enter records the position, q aborts."""
+    pos = bus.read(sid, ADDR_POS, 2) or CENTRE
+    print(f"\n  Jog to the {label} limit: {minus}/{plus} = 2 deg, {minus.upper()}/{plus.upper()} = 10 deg, Enter = save, q = quit")
+    while True:
+        ch = getkey()
+        if ch in ("\r", "\n"):
+            p = bus.read(sid, ADDR_POS, 2)
+            print(f"\n  {label} limit saved at {(p - CENTRE) / STEPS_PER_DEG:+.1f} deg")
+            return p
+        if ch == "q":
+            return None
+        step = {minus: -2, plus: 2, minus.upper(): -10, plus.upper(): 10}.get(ch)
+        if step is None:
+            continue
+        pos = max(0, min(4095, pos + round(step * STEPS_PER_DEG)))
+        p, status = move_watch(bus, sid, pos, speed=300)
+        if p is not None:
+            pos = p if status != "ok" else pos
+            print(f"\r  {(p - CENTRE) / STEPS_PER_DEG:+6.1f} deg  {status}            ", end="", flush=True)
+
+
+def teach(bus):
+    saved = {}
+    try:
+        saved = json.load(open(LIMITS_FILE))
+    except Exception:
+        pass
+    for sid, name, minus, plus, ends in ((PAN_ID, "PAN", "a", "d", ("LEFT", "RIGHT")),
+                                          (TILT_ID, "TILT", "s", "w", ("DOWN", "UP"))):
+        if not bus.ping(sid):
+            print(f"ID {sid} ({name}) not found, skipped"); continue
+        print(f"\n== {name} (ID {sid}) ==  watch the cables while you jog")
+        write_limits(bus, sid, 0, 4095)              # open the range while teaching
+        move_watch(bus, sid, CENTRE)
+        a = jog_to(bus, sid, minus, plus, ends[0])
+        if a is None: break
+        move_watch(bus, sid, CENTRE)
+        b = jog_to(bus, sid, minus, plus, ends[1])
+        if b is None: break
+        lo, hi = min(a, b), max(a, b)
+        if not lo < CENTRE < hi:
+            print(f"  Both limits are on the same side of home: home (centre) must be between them. {name} not saved.")
+            write_limits(bus, sid, *saved.get(str(sid), (0, 4095)))
+            continue
+        lo, hi = write_limits(bus, sid, lo, hi)
+        saved[str(sid)] = [lo, hi]
+        print(f"  {name} limits saved in the servo: {(lo - CENTRE) / STEPS_PER_DEG:+.1f} to {(hi - CENTRE) / STEPS_PER_DEG:+.1f} deg")
+        move_watch(bus, sid, CENTRE)
+    json.dump(saved, open(LIMITS_FILE, "w"), indent=1)
+    print(f"\nSaved to {os.path.basename(LIMITS_FILE)} too (turret_track keeps its aim inside them).")
+
+
 def sweep(bus, sid, name, steps_deg):
     print(f"\n{name} (ID {sid}). Watch the cables. Enter = next step, q + Enter = stop.")
     for d in steps_deg:
@@ -146,7 +221,7 @@ def sweep(bus, sid, name, steps_deg):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["ports", "scan", "assign", "center", "wiggle", "limits", "test"])
+    ap.add_argument("cmd", choices=["ports", "scan", "assign", "center", "wiggle", "limits", "teach", "test"])
     ap.add_argument("--port")
     ap.add_argument("--to", type=int, help="new ID for assign (7 = pan, 8 = tilt)")
     ap.add_argument("--id", type=int, help="servo ID for center / wiggle")
@@ -192,6 +267,9 @@ def main():
                 lo, hi = set_limits(bus, sid_, deg)
                 print(f"  ID {sid_}: limits {lo}..{hi} (+-{deg} deg from centre), saved in the servo")
             print("The servos now refuse to move past these, even if a script asks them to.")
+        elif a.cmd == "teach":
+            sid = PAN_ID
+            teach(bus)
         elif a.cmd == "test":
             ids = [i for i in (PAN_ID, TILT_ID) if bus.ping(i)]
             if not ids:
@@ -204,13 +282,19 @@ def main():
             print("Both servos go to centre first, slowly.")
             for i in ids:
                 move_watch(bus, i, CENTRE)
+            def room(i, want):
+                lo, hi = bus.read(i, ADDR_MIN_LIM, 2), bus.read(i, ADDR_MAX_LIM, 2)
+                if lo is None or hi is None: return want, want
+                return min(want, (CENTRE - lo) / STEPS_PER_DEG - 1), min(want, (hi - CENTRE) / STEPS_PER_DEG - 1)
             ok = True
             if TILT_ID in ids:
-                t = a.tilt_max
-                ok = sweep(bus, TILT_ID, "TILT", [s_ * d for d in (10, 20, 30, t) if d <= t for s_ in (1, -1)])
+                dn, up = room(TILT_ID, a.tilt_max)
+                ok = sweep(bus, TILT_ID, "TILT", [int(s_ * min(d, up if s_ > 0 else dn)) for d in (10, 20, 30, 40) for s_ in (1, -1)
+                                                    if d <= max(up, dn) + 10])
             if ok and PAN_ID in ids:
-                m = min(a.pan_max, 120)
-                sweep(bus, PAN_ID, "PAN", [s_ * d for d in (30, 60, 90, m) if d <= m for s_ in (1, -1)])
+                lf, rt = room(PAN_ID, min(a.pan_max, 120))
+                sweep(bus, PAN_ID, "PAN", [int(s_ * min(d, rt if s_ > 0 else lf)) for d in (30, 60, 90, 120) for s_ in (1, -1)
+                                            if d <= max(lf, rt) + 30])
             input("\nBack at centre. Press Enter to release (torque off: the tilt will sag a little)...")
         elif a.cmd in ("center", "wiggle"):
             if a.id is None:
@@ -229,7 +313,7 @@ def main():
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        for i in ({sid} if a.cmd != "test" else {PAN_ID, TILT_ID}):
+        for i in ({sid} if a.cmd not in ("test", "teach") else {PAN_ID, TILT_ID}):
             if i is None: continue
             try: bus._tx(i, WRITE, [ADDR_TORQUE, 0])
             except Exception: pass
