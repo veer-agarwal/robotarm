@@ -27,18 +27,31 @@ PAN_LIM, TILT_LIM = 120.0, 40.0      # degrees either side of centre (cable loop
 LIMITS = {}
 
 
-def load_limits():
-    """Limits taught with turret_setup.py teach (turret_limits.json, servo ticks); else the defaults above."""
+def _limits_file():
     import json
-    rng = {PAN_ID: (-PAN_LIM, PAN_LIM), TILT_ID: (-TILT_LIM, TILT_LIM)}
     try:
-        d = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "turret_limits.json")))
-        for sid in rng:
-            if str(sid) in d:
-                lo, hi = d[str(sid)]
-                rng[sid] = ((lo - CENTRE) / TPD + 0.5, (hi - CENTRE) / TPD - 0.5)
+        return json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "turret_limits.json")))
     except Exception:
-        pass
+        return {}
+
+
+def load_home():
+    """Home (the 0 deg aim) per servo in ticks, set with turret_setup.py sethome; default the servo centre 2048."""
+    h = _limits_file().get("home", {})
+    return {sid: int(h.get(str(sid), CENTRE)) for sid in (PAN_ID, TILT_ID)}
+
+
+def load_limits():
+    """Limits taught with turret_setup.py teach (servo ticks), as degrees from HOME; else the defaults above."""
+    d, home = _limits_file(), load_home()
+    rng = {PAN_ID: (-PAN_LIM, PAN_LIM), TILT_ID: (-TILT_LIM, TILT_LIM)}
+    for sid in rng:
+        if str(sid) in d:
+            lo, hi = d[str(sid)]
+            rng[sid] = ((lo - home[sid]) / TPD + 0.5, (hi - home[sid]) / TPD - 0.5)
+        else:
+            c = (CENTRE - home[sid]) / TPD
+            rng[sid] = (rng[sid][0] + c, rng[sid][1] + c)
     return rng
 
 
@@ -77,10 +90,11 @@ class Servos:
             self.bus.write(sid, ADDR_SPEED, 2500, 2)
             self.bus.write(sid, ADDR_TORQUE, 1)
         self.ADDR_TORQUE = ADDR_TORQUE
+        self.home = load_home()
 
     def goto(self, pan_deg, tilt_deg):
         for sid, deg in ((PAN_ID, pan_deg), (TILT_ID, tilt_deg)):
-            t = int(round(CENTRE + deg * TPD))
+            t = int(round(self.home[sid] + deg * TPD))
             self.bus._tx(sid, self.WRITE, [self.GOAL] + list(t.to_bytes(2, "little")))
             self.bus._rx(sid, 0)
 

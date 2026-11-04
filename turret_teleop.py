@@ -2,7 +2,7 @@
 Drive the turret with the Xbox controller: pan, tilt and the laser, with the webcam view and a crosshair.
 
     Left stick        : pan (X) and tilt (Y), full speed       Right stick : same, fine (1/4 speed)
-    D-pad             : nudge 0.5 deg                          A           : glide back to centre
+    D-pad             : nudge 0.5 deg                          A           : glide back to home
     Y                 : ARM / disarm the laser                 RT (hold)   : laser ON while armed
     Back / Start      : flip pan / tilt direction              B           : quit (laser off, torque off)
 
@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 import pygame
 
-from turret_track import Servos, Laser, load_limits, open_camera, PAN_ID, TILT_ID, CENTRE, TPD
+from turret_track import Servos, Laser, load_limits, load_home, open_camera, PAN_ID, TILT_ID, TPD
 from turret_setup import move_watch, ADDR_ACC, ADDR_SPEED
 
 AX_LX, AX_LY, AX_RX, AX_RY, AX_LT, AX_RT = 0, 1, 2, 3, 4, 5
@@ -45,7 +45,7 @@ def hud(frame, pan, tilt, armed, firing, lim, flips):
     (plo, phi), (tlo, thi) = lim[PAN_ID], lim[TILT_ID]
     lines = [f"pan {pan:+6.1f}  [{plo:+.0f} .. {phi:+.0f}]", f"tilt {tilt:+6.1f}  [{tlo:+.0f} .. {thi:+.0f}]",
              "LASER " + ("FIRING" if firing else "ARMED (RT fires)" if armed else "safe (Y to arm)"),
-             f"flip pan {'on' if flips[0] < 0 else 'off'}  flip tilt {'on' if flips[1] < 0 else 'off'}   A centre  B quit"]
+             f"flip pan {'on' if flips[0] < 0 else 'off'}  flip tilt {'on' if flips[1] < 0 else 'off'}   A home  B quit"]
     for i, t in enumerate(lines):
         cv2.putText(frame, t, (10, 24 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3)
         cv2.putText(frame, t, (10, 24 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col if i == 2 else (255, 255, 255), 1)
@@ -84,9 +84,9 @@ def main():
         except SystemExit as e:
             print(f"{e}\nNo camera: carrying on without it.")
 
-    print("Gliding to centre...")
+    print("Gliding to home...")
     for sid in (PAN_ID, TILT_ID):
-        move_watch(servos.bus, sid, CENTRE, speed=300)
+        move_watch(servos.bus, sid, servos.home[sid], speed=300)
         servos.bus.write(sid, ADDR_ACC, 40)
         servos.bus.write(sid, ADDR_SPEED, 2500, 2)
     pan = tilt = 0.0
@@ -159,12 +159,12 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        print("Stopping: laser off, gliding to centre, torque off.")
+        print("Stopping: laser off, gliding home, torque off.")
         if laser:
             laser.close()
         try:
             for sid in (PAN_ID, TILT_ID):
-                move_watch(servos.bus, sid, CENTRE, speed=300)
+                move_watch(servos.bus, sid, servos.home[sid], speed=300)
         except Exception:
             pass
         servos.release()
