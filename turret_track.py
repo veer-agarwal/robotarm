@@ -97,7 +97,11 @@ class Laser:
     """Nano running turret_laser.ino: '1' = on, '0' = off, turns itself off if nothing arrives for 0.5 s."""
     def __init__(self, port):
         import serial
-        self.s = serial.Serial(port, 115200, timeout=0)
+        try:
+            self.s = serial.Serial(port, 115200, timeout=0)
+        except serial.SerialException as e:
+            sys.exit(f"Can't open the laser port {port} ({e}).\n"
+                     "If it says 'Access is denied', another program has it open: close the Arduino IDE Serial Monitor and retry.")
         time.sleep(2.0)                  # Nano resets when the port opens
         self.last = 0.0
 
