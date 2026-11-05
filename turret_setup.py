@@ -23,6 +23,7 @@ BAUD = 1_000_000
 ADDR_ID, ADDR_TORQUE, ADDR_ACC, ADDR_GOAL, ADDR_SPEED, ADDR_LOCK = 5, 40, 41, 42, 46, 55
 ADDR_POS, ADDR_VOLT, ADDR_TEMP = 56, 62, 63
 ADDR_MIN_LIM, ADDR_MAX_LIM, ADDR_LOAD = 9, 11, 60
+ADDR_OFFSET = 31            # homing offset (EEPROM, sign bit 11): reported position = real position - offset
 CENTRE = 2048
 STEPS_PER_DEG = 4096 / 360
 PAN_ID, TILT_ID = 7, 8
@@ -175,6 +176,31 @@ def jog_to(bus, sid, minus, plus, label):
             print(f"\r  {(p - CENTRE) / STEPS_PER_DEG:+6.1f} deg  {status}            ", end="", flush=True)
 
 
+def get_offset(bus, sid):
+    v = bus.read(sid, ADDR_OFFSET, 2) or 0
+    return -(v & 0x7FF) if v & 0x800 else v & 0x7FF
+
+
+def set_offset(bus, sid, off):
+    """Write the homing offset with torque off, then hold wherever the servo now reads (no jump)."""
+    off = max(-2047, min(2047, int(off)))
+    bus.write(sid, ADDR_TORQUE, 0)
+    bus.write(sid, ADDR_LOCK, 0)
+    bus.write(sid, ADDR_OFFSET, (abs(off) & 0x7FF) | (0x800 if off < 0 else 0), 2)
+    time.sleep(0.05)
+    bus.write(sid, ADDR_LOCK, 1)
+    p = bus.read(sid, ADDR_POS, 2)
+    bus.write(sid, ADDR_GOAL, p, 2)
+    bus.write(sid, ADDR_TORQUE, 1)
+    return p
+
+
+def recenter(bus, sid):
+    """Make the servo's current physical position read as the middle of its count, so it has +-180 deg each way."""
+    real = bus.read(sid, ADDR_POS, 2) + get_offset(bus, sid)
+    return set_offset(bus, sid, real - CENTRE)
+
+
 def teach(bus):
     """Per servo: jog to HOME (straight ahead) first, then the two limits. Limits go into the servo, home into the json."""
     saved = load_saved()
@@ -184,6 +210,7 @@ def teach(bus):
         if not bus.ping(sid):
             print(f"ID {sid} ({name}) not found, skipped"); continue
         old = saved.get(str(sid), (0, 4095))
+        old_off = get_offset(bus, sid)
         print(f"\n== {name} (ID {sid}) ==  watch the cables while you jog")
         write_limits(bus, sid, 0, 4095)              # open the range while teaching
         move_watch(bus, sid, home_of(sid))
@@ -191,25 +218,27 @@ def teach(bus):
         h = a = b = None
         h = jog_to(bus, sid, minus, plus, "HOME")
         if h is not None:
-            move_watch(bus, sid, h)
+            h = recenter(bus, sid)                   # home becomes the middle of the servo's count: room to 180 deg each way
+            print(f"  Home set as the servo's middle. Now the {ends[0]} limit.")
             a = jog_to(bus, sid, minus, plus, ends[0])
         if a is not None:
             move_watch(bus, sid, h)
             b = jog_to(bus, sid, minus, plus, ends[1])
         if b is None:
-            write_limits(bus, sid, *old)             # quit part way: put the old limits back
+            set_offset(bus, sid, old_off)            # quit part way: put the old offset and limits back
+            write_limits(bus, sid, *old)
             print(f"  {name} not changed (old limits restored).")
             break
         lo, hi = min(a, b), max(a, b)
         if not lo < h < hi:
+            set_offset(bus, sid, old_off)
             write_limits(bus, sid, *old)
             print(f"  HOME has to be between the two limits. {name} not changed (old limits restored).")
             continue
         lo, hi = write_limits(bus, sid, lo, hi)
         saved[str(sid)] = [lo, hi]
         home[str(sid)] = h
-        print(f"  {name} saved: home {(h - CENTRE) / STEPS_PER_DEG:+.1f} deg from the servo centre, "
-              f"limits {(lo - h) / STEPS_PER_DEG:+.1f} / {(hi - h) / STEPS_PER_DEG:+.1f} deg from home")
+        print(f"  {name} saved: limits {(lo - h) / STEPS_PER_DEG:+.1f} / {(hi - h) / STEPS_PER_DEG:+.1f} deg from home")
         move_watch(bus, sid, h)
     json.dump(saved, open(LIMITS_FILE, "w"), indent=1)
     print(f"\nSaved to {os.path.basename(LIMITS_FILE)}. Teleop and tracking now use this home and these limits.")
