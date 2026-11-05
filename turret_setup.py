@@ -9,7 +9,7 @@ and the 12 V supply on. New servos all ship as ID 1, so plug in ONE servo at a t
     python turret_setup.py center --port COM9 --id 7  move slowly to the middle (2048) and hold
     python turret_setup.py wiggle --port COM9 --id 7  small back-and-forth test, ends centred
     python turret_setup.py limits --port COM9         save the angle limits IN the servos (pan +-120, tilt +-40)
-    python turret_setup.py teach  --port COM9         jog to your own left/right and up/down limits, save them in the servos
+    python turret_setup.py teach  --port COM9         per axis: jog to HOME (straight ahead), then the 2 limits; saves all
     python turret_setup.py sethome --port COM9        jog to where "straight ahead" should be; limits stay where they are
     python turret_setup.py test   --port COM9         slow pan + tilt sweep, Enter between steps, stops on a snag
 
@@ -176,34 +176,43 @@ def jog_to(bus, sid, minus, plus, label):
 
 
 def teach(bus):
+    """Per servo: jog to HOME (straight ahead) first, then the two limits. Limits go into the servo, home into the json."""
     saved = load_saved()
+    home = saved.setdefault("home", {})
     for sid, name, minus, plus, ends in ((PAN_ID, "PAN", "a", "d", ("LEFT", "RIGHT")),
                                           (TILT_ID, "TILT", "s", "w", ("DOWN", "UP"))):
         if not bus.ping(sid):
             print(f"ID {sid} ({name}) not found, skipped"); continue
+        old = saved.get(str(sid), (0, 4095))
         print(f"\n== {name} (ID {sid}) ==  watch the cables while you jog")
         write_limits(bus, sid, 0, 4095)              # open the range while teaching
-        move_watch(bus, sid, CENTRE)
-        a = jog_to(bus, sid, minus, plus, ends[0])
-        if a is None: break
-        move_watch(bus, sid, CENTRE)
-        b = jog_to(bus, sid, minus, plus, ends[1])
-        if b is None: break
+        move_watch(bus, sid, home_of(sid))
+        print("  First HOME: where this axis should point when it's 'straight ahead'.")
+        h = a = b = None
+        h = jog_to(bus, sid, minus, plus, "HOME")
+        if h is not None:
+            move_watch(bus, sid, h)
+            a = jog_to(bus, sid, minus, plus, ends[0])
+        if a is not None:
+            move_watch(bus, sid, h)
+            b = jog_to(bus, sid, minus, plus, ends[1])
+        if b is None:
+            write_limits(bus, sid, *old)             # quit part way: put the old limits back
+            print(f"  {name} not changed (old limits restored).")
+            break
         lo, hi = min(a, b), max(a, b)
-        if not lo < CENTRE < hi:
-            print(f"  Both limits are on the same side of home: home (centre) must be between them. {name} not saved.")
-            write_limits(bus, sid, *saved.get(str(sid), (0, 4095)))
+        if not lo < h < hi:
+            write_limits(bus, sid, *old)
+            print(f"  HOME has to be between the two limits. {name} not changed (old limits restored).")
             continue
         lo, hi = write_limits(bus, sid, lo, hi)
         saved[str(sid)] = [lo, hi]
-        print(f"  {name} limits saved in the servo: {(lo - CENTRE) / STEPS_PER_DEG:+.1f} to {(hi - CENTRE) / STEPS_PER_DEG:+.1f} deg")
-        h = saved.get("home", {}).get(str(sid))
-        if h is not None and not lo < h < hi:
-            saved["home"].pop(str(sid))
-            print(f"  Your saved {name} home is outside the new limits, so it's back to the servo centre. Rerun sethome if you want.")
-        move_watch(bus, sid, CENTRE)
+        home[str(sid)] = h
+        print(f"  {name} saved: home {(h - CENTRE) / STEPS_PER_DEG:+.1f} deg from the servo centre, "
+              f"limits {(lo - h) / STEPS_PER_DEG:+.1f} / {(hi - h) / STEPS_PER_DEG:+.1f} deg from home")
+        move_watch(bus, sid, h)
     json.dump(saved, open(LIMITS_FILE, "w"), indent=1)
-    print(f"\nSaved to {os.path.basename(LIMITS_FILE)} too (turret_track keeps its aim inside them).")
+    print(f"\nSaved to {os.path.basename(LIMITS_FILE)}. Teleop and tracking now use this home and these limits.")
 
 
 def load_saved():
