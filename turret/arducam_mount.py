@@ -40,8 +40,8 @@ def mount():
     window = box((FX0 - 1, -WIN, ZR + PAD_T), (FX1 + 1, WIN, BC_Z + WIN))
     gussets = []
     for y in (-20.5, 17.5):
-        pts = np.array([[FX0, y, ZR + PAD_T], [FX0 - 14, y, ZR + PAD_T], [FX0, y, BC_Z + 12],
-                        [FX0, y + 3, ZR + PAD_T], [FX0 - 14, y + 3, ZR + PAD_T], [FX0, y + 3, BC_Z + 12]])
+        pts = np.array([[FX0, y, ZR + PAD_T], [FX0 - 10, y, ZR + PAD_T], [FX0, y, BC_Z + 12],
+                        [FX0, y + 3, ZR + PAD_T], [FX0 - 10, y + 3, ZR + PAD_T], [FX0, y + 3, BC_Z + 12]])
         gussets.append(trimesh.convex.convex_hull(pts))
     posts, pilots = [], []
     for sy in (-1, 1):
