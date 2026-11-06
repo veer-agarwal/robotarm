@@ -4,17 +4,23 @@
     python turret_track.py --cam 0 --port COM9           drive the servos too
     python turret_track.py --cam 0 --port COM9 --nano COM10   plus the laser
 
-Modes (F toggles):
-  fixed   camera sits still on the desk; the servos point where the target is in the picture
-          (for testing before the camera is mounted on the turret)
-  follow  camera rides on the turret; the servos move to keep the target in the centre
+    python turret_track.py --cam 1 --port COM9 --mode predict --dfov 130   fast drone tracking (Arducam)
 
-Keys:  C  click a new target (draw a box, Enter)    X  drop the target
+Modes (F cycles):
+  fixed    camera sits still on the desk; the servos point where the target is in the picture
+           (for testing before the camera is mounted on the turret)
+  follow   camera rides on the turret; the servos move to keep the target in the centre
+  predict  camera rides on the turret; works out where the target is in the room, how fast it is moving,
+           and aims where it will be (turret_predict.py). Use this one for the drone. Reads the servo angles each
+           frame, so it needs --port. Set --hfov (or --dfov) to your lens.
+
+Keys:  C  click a new target (draw a box, Enter)    X  drop the target    F  next mode
        R  start/stop recording raw video to recordings\\  (for drone clips -> turret_label.py)
-       L  arm/disarm the laser (fires only when locked on, in follow mode)
+       L  arm/disarm the laser (fires only when locked on, in follow or predict mode)
        P / T  flip pan / tilt direction      E / Shift+E  exposure darker / brighter   A  auto exposure   Q  quit
 """
 import argparse, os, sys, time
+from collections import deque
 import cv2
 import numpy as np
 
@@ -80,13 +86,13 @@ def open_camera(idx, w, h, fps, exposure):
 
 
 class Servos:
-    def __init__(self, port):
-        from turret_setup import Bus, ADDR_TORQUE, ADDR_ACC, ADDR_SPEED, ADDR_GOAL, WRITE
-        self.bus, self.GOAL, self.WRITE = Bus(port), ADDR_GOAL, WRITE
+    def __init__(self, port, acc=60):
+        from turret_setup import Bus, ADDR_TORQUE, ADDR_ACC, ADDR_SPEED, ADDR_GOAL, ADDR_POS, WRITE
+        self.bus, self.GOAL, self.WRITE, self.POS = Bus(port), ADDR_GOAL, WRITE, ADDR_POS
         for sid in (PAN_ID, TILT_ID):
             if not self.bus.ping(sid):
                 sys.exit(f"No servo {sid} on {port}. Run turret_setup.bat scan --port {port}.")
-            self.bus.write(sid, ADDR_ACC, 60)
+            self.bus.write(sid, ADDR_ACC, acc)            # 60 = gentle, 254 = snappy (what predict mode wants)
             self.bus.write(sid, ADDR_SPEED, 2500, 2)
             self.bus.write(sid, ADDR_TORQUE, 1)
         self.ADDR_TORQUE = ADDR_TORQUE
@@ -97,6 +103,16 @@ class Servos:
             t = int(round(self.home[sid] + deg * TPD))
             self.bus._tx(sid, self.WRITE, [self.GOAL] + list(t.to_bytes(2, "little")))
             self.bus._rx(sid, 0)
+
+    def read_deg(self):
+        """Present (pan, tilt) in degrees from home, or None if a read failed."""
+        out = []
+        for sid in (PAN_ID, TILT_ID):
+            v = self.bus.read(sid, self.POS, 2)
+            if v is None: return None
+            if v & 0x8000: v = -(v & 0x7FFF)              # sign bit
+            out.append((v - self.home[sid]) / TPD)
+        return tuple(out)
 
     def release(self):
         for sid in (PAN_ID, TILT_ID):
@@ -128,6 +144,16 @@ class Laser:
         except Exception: pass
 
 
+def angle_at(hist, t):
+    """Servo (pan, tilt) at time t, interpolated from the timestamped reads in hist."""
+    if t <= hist[0][0]: return hist[0][1], hist[0][2]
+    for (t0, p0, q0), (t1, p1, q1) in zip(hist, list(hist)[1:]):
+        if t0 <= t <= t1:
+            w = (t - t0) / max(1e-6, t1 - t0)
+            return p0 + w * (p1 - p0), q0 + w * (q1 - q0)
+    return hist[-1][1], hist[-1][2]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cam", type=int, default=0)
@@ -135,21 +161,34 @@ def main():
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--exposure", type=float, default=-6, help="DirectShow log2 seconds: -6 = 1/64 s, -8 = 1/256 s")
     ap.add_argument("--hfov", type=float, default=70.0, help="camera horizontal field of view, degrees")
+    ap.add_argument("--dfov", type=float, help="diagonal field of view instead (Arducam 130 deg lens: --dfov 130)")
     ap.add_argument("--port", help="turret servo board, e.g. COM9 (omit for camera-only)")
     ap.add_argument("--nano", help="Nano for the laser, e.g. COM10")
-    ap.add_argument("--mode", choices=["fixed", "follow"], default="fixed")
+    ap.add_argument("--mode", choices=["fixed", "follow", "predict"], default="fixed")
     ap.add_argument("--kp", type=float, default=0.35, help="follow mode: fraction of the error corrected per frame")
+    ap.add_argument("--tracker", choices=["auto", "blob", "template", "csrt"], default="auto",
+                    help="predict mode: auto (default) picks blob for a target darker than the background, else template;"
+                         " csrt = OpenCV's, slower and loses the target on fast turret moves")
+    ap.add_argument("--lead", type=float, default=0.03, help="predict mode: seconds to aim ahead (sim best: 0.03)")
+    ap.add_argument("--q", type=float, default=2e6, help="predict mode: how fast the target can change direction")
+    ap.add_argument("--latency", type=float, default=0.025, help="predict mode: camera delay, seconds (capture -> frame here)")
+    ap.add_argument("--acc", type=int, help="servo ACC register 0-254 (default 60; 254 in predict mode)")
     a = ap.parse_args()
+    if a.mode == "predict" and not a.port:
+        sys.exit("predict mode reads the servo angles, so it needs --port (e.g. --port COM9).")
     global LIMITS
     LIMITS = load_limits()
     print(f"limits: pan {LIMITS[PAN_ID][0]:+.0f}..{LIMITS[PAN_ID][1]:+.0f} deg, tilt {LIMITS[TILT_ID][0]:+.0f}..{LIMITS[TILT_ID][1]:+.0f} deg")
 
     cap = open_camera(a.cam, a.width, a.height, a.fps, a.exposure)
-    servos = Servos(a.port) if a.port else None
+    servos = Servos(a.port, a.acc if a.acc is not None else (254 if a.mode == "predict" else 60)) if a.port else None
     laser = Laser(a.nano) if a.nano else None
     os.makedirs("recordings", exist_ok=True)
 
     tracker, tname, box = None, "", None
+    aim = None                                       # predict mode's Predictive
+    angle_hist = deque(maxlen=64)                    # (time, pan, tilt) as read from the servos
+    lens = None
     pan = tilt = 0.0; pan_sign, tilt_sign = -1.0, -1.0       # pan servo is flipped in the v2 turret
     mode, armed, writer, exposure = a.mode, False, None, a.exposure
     t_prev, fps_est = time.time(), 0.0
@@ -162,13 +201,38 @@ def main():
             ok, frame = cap.read()
             if not ok:
                 print("camera stopped delivering frames"); break
+            t_frame = time.perf_counter()
+            raw = frame.copy()                       # clean copy: the target is picked from this, not the overlay
             H, W = frame.shape[:2]
             vfov = a.hfov * H / W
+            if lens is None or (lens.w, lens.h) != (W, H):
+                from turret_predict import Lens
+                lens = Lens(W, H, hfov=a.hfov, diag_fov=a.dfov)
+            if mode == "predict" and servos:
+                r = servos.read_deg()
+                if r is not None:                                 # store in the predictor's convention (+ = left / up)
+                    angle_hist.append((time.perf_counter(), -pan_sign * r[0], -tilt_sign * r[1]))
             if writer is not None: writer.write(frame)
             now = time.time(); fps_est = 0.9 * fps_est + 0.1 / max(1e-3, now - t_prev); t_prev = now
 
             locked = False
-            if tracker is not None:
+            if mode == "predict" and aim is not None and angle_hist:
+                t_cap = t_frame - a.latency
+                pm, tm = angle_at(angle_hist, t_cap)               # where the turret pointed when the frame was taken
+                goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
+                if goal is None:
+                    aim = None
+                    cv2.putText(frame, "TARGET LOST - press C", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                else:
+                    pan = float(np.clip(-pan_sign * goal[0], *LIMITS[PAN_ID]))
+                    tilt = float(np.clip(-tilt_sign * goal[1], *LIMITS[TILT_ID]))
+                    servos.goto(pan, tilt)
+                    if aim.box is not None:
+                        b = [int(v) for v in aim.box]
+                        cv2.rectangle(frame, (b[0], b[1]), (b[0] + b[2], b[1] + b[3]), (0, 255, 0) if locked else (0, 200, 255), 2)
+                    u = __import__("turret_predict").world_to_pixel(lens, pm, tm, *aim.predicted(time.perf_counter() + a.lead))
+                    if u is not None: cv2.circle(frame, (int(u[0]), int(u[1])), 6, (255, 0, 255), 2)   # where it's aiming
+            elif mode != "predict" and tracker is not None:
                 found, b = tracker.update(frame)
                 if found:
                     box = tuple(int(v) for v in b)
@@ -205,9 +269,20 @@ def main():
             elif k == ord("c"):
                 r = cv2.selectROI(win, frame, showCrosshair=True)
                 if r[2] > 4 and r[3] > 4:
-                    tracker, tname = make_tracker(); tracker.init(frame, r); box = r
-            elif k == ord("x"): tracker = None; box = None
-            elif k == ord("f"): mode = "follow" if mode == "fixed" else "fixed"
+                    if mode == "predict":
+                        from turret_predict import Predictive
+                        if angle_hist:
+                            _, pm, tm = angle_hist[-1]
+                            aim = Predictive(lens, a.tracker); aim.start(raw, r, pm, tm); tname = aim.name
+                    else:
+                        tracker, tname = make_tracker(); tracker.init(raw, r); box = r
+            elif k == ord("x"): tracker = None; box = None; aim = None
+            elif k == ord("f"):
+                order = ["fixed", "follow"] + (["predict"] if servos else [])
+                mode = order[(order.index(mode) + 1) % len(order)]; tracker = None; aim = None
+                if mode == "predict":
+                    print("predict mode: press C to pick the target. ACC is", "set by --acc" if a.acc is not None else "60 here;"
+                          " start with --mode predict for ACC 254")
             elif k == ord("p"): pan_sign = -pan_sign
             elif k == ord("t"): tilt_sign = -tilt_sign
             elif k == ord("l"): armed = not armed
