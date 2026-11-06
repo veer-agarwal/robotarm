@@ -5,3 +5,4 @@ outputs/
 recordings/
 datasets/
 turret_limits.json
+turret/out/
