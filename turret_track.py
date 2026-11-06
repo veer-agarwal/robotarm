@@ -16,10 +16,11 @@ Modes (F cycles):
 
 Keys:  C  click a new target (draw a box, Enter)    X  drop the target    F  next mode
        R  start/stop recording raw video to recordings\\  (for drone clips -> turret_label.py)
-       L  arm/disarm the laser (fires only when locked on, in follow or predict mode)
+       L  arm/disarm the laser. It fires only in the FIRE state: locked 150 ms, aim error under 0.5 deg,
+          prediction steady (turret_hud.py has the rule and the HUD)
        P / T  flip pan / tilt direction      E / Shift+E  exposure darker / brighter   A  auto exposure   Q  quit
 """
-import argparse, os, sys, time
+import argparse, math, os, sys, time
 from collections import deque
 import cv2
 import numpy as np
@@ -192,6 +193,8 @@ def main():
     pan = tilt = 0.0; pan_sign, tilt_sign = -1.0, -1.0       # pan servo is flipped in the v2 turret
     mode, armed, writer, exposure = a.mode, False, None, a.exposure
     t_prev, fps_est = time.time(), 0.0
+    import turret_hud
+    fc = turret_hud.FireControl(); seen = 0             # fire rule; frames in a row with the target actually seen
     win = "turret"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     if servos: servos.goto(0, 0)
@@ -216,22 +219,27 @@ def main():
             now = time.time(); fps_est = 0.9 * fps_est + 0.1 / max(1e-3, now - t_prev); t_prev = now
 
             locked = False
+            hud = dict(box=None, lead=None, err=None, rate=None); tracking = steady = found_now = False
             if mode == "predict" and aim is not None and angle_hist:
                 t_cap = t_frame - a.latency
                 pm, tm = angle_at(angle_hist, t_cap)               # where the turret pointed when the frame was taken
                 goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
                 if goal is None:
                     aim = None
-                    cv2.putText(frame, "TARGET LOST - press C", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                 else:
                     pan = float(np.clip(-pan_sign * goal[0], *LIMITS[PAN_ID]))
                     tilt = float(np.clip(-tilt_sign * goal[1], *LIMITS[TILT_ID]))
                     servos.goto(pan, tilt)
-                    if aim.box is not None:
-                        b = [int(v) for v in aim.box]
-                        cv2.rectangle(frame, (b[0], b[1]), (b[0] + b[2], b[1] + b[3]), (0, 255, 0) if locked else (0, 200, 255), 2)
-                    u = __import__("turret_predict").world_to_pixel(lens, pm, tm, *aim.predicted(time.perf_counter() + a.lead))
-                    if u is not None: cv2.circle(frame, (int(u[0]), int(u[1])), 6, (255, 0, 255), 2)   # where it's aiming
+                    from turret_predict import world_to_pixel
+                    t_n = time.perf_counter()
+                    _, p_now, t_now_ = angle_hist[-1]
+                    bp, bt = aim.predicted(t_n)                     # where the target is now vs where the turret points
+                    hud["err"] = math.hypot((bp - p_now) * math.cos(math.radians(bt)), bt - t_now_)
+                    hud["rate"] = math.hypot(aim.kp.x[1], aim.kt.x[1])
+                    hud["box"] = aim.box
+                    hud["lead"] = world_to_pixel(lens, pm, tm, *aim.predicted(t_n + a.lead))
+                    tracking = True
+                    tracking = True; found_now = aim.misses == 0
             elif mode != "predict" and tracker is not None:
                 found, b = tracker.update(frame)
                 if found:
@@ -245,29 +253,29 @@ def main():
                     else:                                     # keep it centred (camera on the turret)
                         pan += np.clip(pan_sign * a.kp * ex, -4, 4)
                         tilt += np.clip(tilt_sign * a.kp * ey, -4, 4)
-                        locked = abs(ex) < 2.0 and abs(ey) < 2.0
                     pan = float(np.clip(pan, *LIMITS[PAN_ID])); tilt = float(np.clip(tilt, *LIMITS[TILT_ID]))
                     if servos: servos.goto(pan, tilt)
-                    cv2.rectangle(frame, box[:2], (box[0] + box[2], box[1] + box[3]), (0, 255, 0) if locked else (0, 200, 255), 2)
-                else:
-                    cv2.putText(frame, "TARGET LOST - press C", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            if laser: laser.set(armed and locked)
-            if tracker is None:
-                cv2.putText(frame, "Press C (with this window selected) to pick a target", (20, 75),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    hud["box"] = box; tracking = True; found_now = True
+                    if mode == "follow":                      # aim error is only known when the camera rides along
+                        hud["err"] = math.hypot(ex, ey)
+            seen = seen + 1 if tracking and found_now else 0
+            steady = seen >= 6                             # seen in 6 frames straight (~50 ms at 120 fps)
 
-            # overlay (not recorded)
-            cv2.drawMarker(frame, (W // 2, H // 2), (255, 255, 255), cv2.MARKER_CROSS, 30, 1)
-            hud = f"{mode}  {fps_est:4.0f} fps  pan {pan:+6.1f}  tilt {tilt:+5.1f}  exp {exposure:g}  {tname}"
-            cv2.putText(frame, hud, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            if writer is not None: cv2.circle(frame, (W - 30, 30), 10, (0, 0, 255), -1)
-            if laser: cv2.putText(frame, "LASER " + ("ON" if armed and locked else "ARMED" if armed else "SAFE"),
-                                  (20, H - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255) if armed else (200, 200, 200), 2)
-            cv2.imshow(win, frame)
+            half = None                                     # target's half-width in degrees, from its box
+            if hud["box"] is not None and lens is not None:
+                half = math.degrees(math.atan(max(hud["box"][2], hud["box"][3]) / 2 / lens.f))
+            state = fc.update(tracking, hud["err"], steady, armed, half)
+            if laser: laser.set(state == "FIRE")
+
+            # HUD (drawn on a scaled copy; recordings stay clean)
+            hud.update(state=state, reason=fc.reason, hold_ms=fc.hold_ms, armed=armed, pan=pan, tilt=tilt, fps=fps_est,
+                       tracker=tname.replace("predictive ", "").split(",")[0].strip("()").upper() if tname else "",
+                       mode=mode, recording=writer is not None)
+            cv2.imshow(win, turret_hud.draw(frame, hud, out_w=max(1280, W)))
             k = cv2.waitKey(1) & 0xFF
             if k in (ord("q"), 27): break
             elif k == ord("c"):
-                r = cv2.selectROI(win, frame, showCrosshair=True)
+                r = cv2.selectROI(win, raw, showCrosshair=True)
                 if r[2] > 4 and r[3] > 4:
                     if mode == "predict":
                         from turret_predict import Predictive
