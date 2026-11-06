@@ -1,13 +1,13 @@
 """Arducam OV9281 (B0592, UC-844 board, 38 x 38 mm) mount for the laser plate's webcam riser.
 
 Sits on the riser top, held by 2x M3x8 screws into heat-set inserts in the riser top (CAM_INSERT_X in
-perses_turret.py). The slots for zip ties are still there as a spare. The board
-stands on 4 posts in front of a U-frame, lens forward, 8 mm off the frame so the parts and the 4-pin USB plug
-on its back clear. Each post has pilot holes for BOTH hole patterns the board takes (34 x 34 and 28 x 28, per
-Arducam's datasheet), so whichever holes your board has, one set lines up. M2 x 6-8 screws, self-tapping into
-the 1.8 mm pilots.
+perses_turret.py). The slots for zip ties are still there as a spare.
 
-    python arducam_mount.py           writes out/arducam_mount.stl (print orientation) + a tilt-sweep fit check
+No M2 screws needed for the board: it slides down into two grooved rails (1.5 mm of each side edge held), lens
+forward, 8 mm in front of a U-frame so the parts and the 4-pin USB plug on its back clear. A keeper bar sits on
+the rail tops with two tongues that press on the board's top edge, held by 2x M3x8 into inserts in the rails.
+
+    python arducam_mount.py    writes out/arducam_mount.stl + out/arducam_keeper.stl (print orientation) + fit check
 
 World frame as perses_turret.py: x forward, z up, tilt axis along y at z = ZT.
 """
@@ -30,8 +30,12 @@ BC_Z = ZR + PAD_T + 1.0 + BOARD / 2    # board centre height (board bottom 1 mm 
 FX1 = RX1                              # frame front face, flush with the riser front
 FX0 = FX1 - FRAME_T
 BX0 = FX1 + GAP                        # board back face
-PATTERNS = (34.0, 28.0)
-PILOT = 1.8
+GRIP = 1.5                             # how much of each side edge the rails hold
+RAIL_IN, RAIL_OUT = BOARD / 2 - GRIP, 24.5
+LIP_X = BX0 + BOARD_T + 1.6            # front of the rails' lips
+RAIL_TOP = BC_Z + BOARD / 2 + 3.0
+KEEP_T = 4.0
+KEEP_SCREW = (-14.0, 20.75)            # (x, |y|) of the keeper screws / rail inserts
 WIN = 11.0                             # half-width of the frame's window (plug + cable pass through)
 
 
@@ -44,21 +48,30 @@ def mount():
         pts = np.array([[FX0, y, ZR + PAD_T], [FX0 - 10, y, ZR + PAD_T], [FX0, y, BC_Z + 12],
                         [FX0, y + 3, ZR + PAD_T], [FX0 - 10, y + 3, ZR + PAD_T], [FX0, y + 3, BC_Z + 12]])
         gussets.append(trimesh.convex.convex_hull(pts))
-    posts, pilots = [], []
+    rails, pilots = [], []
     for sy in (-1, 1):
-        for sz in (-1, 1):
-            a = [(sy * p / 2, sz * p / 2) for p in PATTERNS]
-            pts = []
-            for (y, z) in a:
-                c = cyl(2.7, (FX1 - 0.5, y, BC_Z + z), (BX0, y, BC_Z + z), 32)
-                pts.append(c)
-            posts.append(trimesh.convex.convex_hull(np.vstack([p.vertices for p in pts])))
-            for (y, z) in a:
-                pilots.append(cyl(PILOT / 2, (BX0 - 7.0, y, BC_Z + z), (BX0 + 1, y, BC_Z + z), 24))
-    m = U(pad, D(frame, window), *gussets, *posts)
+        y0, y1 = sorted((sy * RAIL_IN, sy * RAIL_OUT))
+        rails.append(box((FX1 - 0.5, y0, ZR), (LIP_X, y1, RAIL_TOP)))
+        g0, g1 = sorted((sy * (RAIL_IN - 1.0), sy * (BOARD / 2 + 0.4)))
+        pilots.append(box((BX0 - 0.15, g0, ZR + PAD_T + 1.0), (BX0 + BOARD_T + 0.15, g1, RAIL_TOP + 1)))   # groove
+        x, y = KEEP_SCREW
+        pilots.append(cyl(T.INSERT_D / 2, (x, sy * y, RAIL_TOP - T.INSERT_DEPTH), (x, sy * y, RAIL_TOP + 1), 24))
+    m = U(pad, D(frame, window), *gussets, *rails)
     slots = [box((-46.0, s * 22 - 2.0, ZR - 1), (-32.0, s * 22 + 2.0, ZR + PAD_T + 1)) for s in (-1, 1)]   # zip ties (spare)
     screws = [cyl(T.M3_CLEAR / 2, (x, 0, ZR - 1), (x, 0, ZR + PAD_T + 1), 24) for x in T.CAM_INSERT_X]       # 2x M3x8 into the riser inserts
     return D(m, *pilots, *slots, *screws)
+
+
+def keeper():
+    """Bar across the rail tops; tongues drop into the grooves onto the board's top edge."""
+    bar = box((FX1 - 0.5, -RAIL_OUT, RAIL_TOP), (LIP_X, RAIL_OUT, RAIL_TOP + KEEP_T))
+    tongues = []
+    for sy in (-1, 1):
+        y0, y1 = sorted((sy * (RAIL_IN + 0.2), sy * (BOARD / 2 + 0.2)))
+        tongues.append(box((BX0 + 0.1, y0, BC_Z + BOARD / 2 + 0.2), (BX0 + BOARD_T - 0.1, y1, RAIL_TOP + 0.01)))
+    holes = [cyl(T.M3_CLEAR / 2, (KEEP_SCREW[0], sy * KEEP_SCREW[1], RAIL_TOP - 1), (KEEP_SCREW[0], sy * KEEP_SCREW[1], RAIL_TOP + KEEP_T + 1), 24)
+             for sy in (-1, 1)]
+    return D(U(bar, *tongues), *holes)
 
 
 def camera_proxy():
@@ -70,7 +83,9 @@ def camera_proxy():
 
 
 if __name__ == "__main__":
-    m, cam = mount(), camera_proxy()
+    m, cam, kp = mount(), camera_proxy(), keeper()
+    print(f"keeper: watertight={kp.is_watertight}  extents={np.round(kp.extents, 1)}  keeper x mount: ", end="")
+    _k = trimesh.boolean.intersection([kp, m], engine="manifold"); print(0.0 if _k.is_empty else round(_k.volume, 2), "mm3")
     print(f"mount: watertight={m.is_watertight}  vol={m.volume / 1000:.1f} cm3  extents={np.round(m.extents, 1)}")
     plate = T.parts["laser_plate"]
 
@@ -85,7 +100,7 @@ if __name__ == "__main__":
     bad = []
     for deg in range(-int(T.TILT_LIMIT), int(T.TILT_LIMIT) + 1, 5):
         M = Rot(np.radians(deg), (0, 1, 0), point=(0, 0, T.ZT))
-        for nm, part in (("mount", m), ("camera", cam)):
+        for nm, part in (("mount", m), ("camera", cam), ("keeper", kp)):
             p = part.copy(); p.apply_transform(M)
             for k, v in fixed.items():
                 x = vol(p, v)
@@ -96,5 +111,7 @@ if __name__ == "__main__":
     out = m.copy(); out.apply_translation(-out.bounds[0])          # pad on the bed as modelled
     os.makedirs(T.OUT, exist_ok=True)
     out.export(os.path.join(T.OUT, "arducam_mount.stl"))
-    U(plate, m, cam).export(os.path.join(T.OUT, "arducam_on_plate_preview.stl"))
+    k2 = kp.copy(); k2.apply_transform(Rot(np.pi, (1, 0, 0))); k2.apply_translation(-k2.bounds[0])   # bar flat, tongues up
+    k2.export(os.path.join(T.OUT, "arducam_keeper.stl"))
+    U(plate, m, cam, kp).export(os.path.join(T.OUT, "arducam_on_plate_preview.stl"))
     print("wrote", os.path.join(T.OUT, "arducam_mount.stl"))
