@@ -342,6 +342,7 @@ LP_X = 60.0                         # plate half length
 LASER_X0, LASER_X1 = 22.0, 58.0     # laser block along x
 LASER_Z = CR_Z1 + 11.0              # bore centre height
 CAM_RISER = 20.0                    # webcam pad height, lens clears the laser block
+CAM_INSERT_X = (-52.0, -29.0)       # Arducam mount screws (riser top, y = 0), clear of the slots and the centre pocket
 
 def laser_plate():
     floor = box((-LP_X, -YO, CR_Z0), (LP_X, YO, CR_Z1))
@@ -354,6 +355,8 @@ def laser_plate():
              box((LASER_X0 - 1, -1.5, CR_Z1 - 1), (LASER_X0 + 6, 1.5, LASER_Z)),                          # lead exit slot
              cyl(3.3, (-39, 0, CR_Z0 - 1), (-39, 0, CR_Z1 + CAM_RISER + 1)),                              # 1/4-20 webcam screw
              cyl(6.5, (-39, 0, CR_Z0 - 1), (-39, 0, CR_Z1 + CAM_RISER - 6))]                              # nut / head pocket from below
+    for x in CAM_INSERT_X:                                                                                # Arducam mount: 2x M3 inserts in the riser top
+        cuts.append(cyl(INSERT_D / 2, (x, 0, CR_Z1 + CAM_RISER - INSERT_DEPTH), (x, 0, CR_Z1 + CAM_RISER + 1), 24))
     for y in (-22, 22):                                                                                   # 20 mm velcro slots for clip webcams
         cuts.append(box((-46, y - 2, CR_Z0 - 1), (-32, y + 2, CR_Z1 + CAM_RISER + 1)))
     cuts.append(box((-12, -30, CR_Z0 - 1), (14, 30, CR_Z1 + 1)))                                          # tool access to the ear screws

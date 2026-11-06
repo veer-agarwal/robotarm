@@ -1,6 +1,7 @@
 """Arducam OV9281 (B0592, UC-844 board, 38 x 38 mm) mount for the laser plate's webcam riser.
 
-Sits on the riser top, held by two zip ties (or the velcro strap) through the riser's 20 mm slots. The board
+Sits on the riser top, held by 2x M3x8 screws into heat-set inserts in the riser top (CAM_INSERT_X in
+perses_turret.py). The slots for zip ties are still there as a spare. The board
 stands on 4 posts in front of a U-frame, lens forward, 8 mm off the frame so the parts and the 4-pin USB plug
 on its back clear. Each post has pilot holes for BOTH hole patterns the board takes (34 x 34 and 28 x 28, per
 Arducam's datasheet), so whichever holes your board has, one set lines up. M2 x 6-8 screws, self-tapping into
@@ -55,8 +56,9 @@ def mount():
             for (y, z) in a:
                 pilots.append(cyl(PILOT / 2, (BX0 - 7.0, y, BC_Z + z), (BX0 + 1, y, BC_Z + z), 24))
     m = U(pad, D(frame, window), *gussets, *posts)
-    slots = [box((-46.0, s * 22 - 2.0, ZR - 1), (-32.0, s * 22 + 2.0, ZR + PAD_T + 1)) for s in (-1, 1)]   # zip ties
-    return D(m, *pilots, *slots)
+    slots = [box((-46.0, s * 22 - 2.0, ZR - 1), (-32.0, s * 22 + 2.0, ZR + PAD_T + 1)) for s in (-1, 1)]   # zip ties (spare)
+    screws = [cyl(T.M3_CLEAR / 2, (x, 0, ZR - 1), (x, 0, ZR + PAD_T + 1), 24) for x in T.CAM_INSERT_X]       # 2x M3x8 into the riser inserts
+    return D(m, *pilots, *slots, *screws)
 
 
 def camera_proxy():
