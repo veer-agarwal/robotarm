@@ -5,6 +5,8 @@
     python turret_track.py --cam 0 --port COM9 --nano COM10   plus the laser
 
     python turret_track.py --cam 1 --port COM9 --mode predict --dfov 130   fast drone tracking (Arducam)
+    ... --mode predict --detect models/tello.pt     the trained drone detector: finds the Tello by itself (no C),
+                                                    follows it, and picks it up again after losing it
 
 Modes (F cycles):
   fixed    camera sits still on the desk; the servos point where the target is in the picture
@@ -191,6 +193,11 @@ def main():
     ap.add_argument("--tracker", choices=["csrt", "auto", "blob", "template"], default="csrt",
                     help="predict mode: csrt (default; best in clutter, re-finds the target after a slip); auto = blob for a"
                          " target darker than the background, else template (fastest, fine against plain walls)")
+    ap.add_argument("--detect", nargs="?", const=os.path.join("models", "tello.pt"),
+                    help="predict mode: use the trained drone detector (default models/tello.pt) instead of C + a tracker")
+    ap.add_argument("--det-conf", type=float, default=0.35, help="detector: lowest score that counts as a drone")
+    ap.add_argument("--acquire", type=float, default=0.5,
+                    help="detector: score needed (3 frames running, same spot) to start tracking a new drone")
     ap.add_argument("--lead", type=float, default=0.03, help="predict mode: seconds to aim ahead (sim best: 0.03)")
     ap.add_argument("--q", type=float, default=2e6, help="predict mode: how fast the target can change direction")
     ap.add_argument("--latency", type=float, default=0.025, help="predict mode: camera delay, seconds (capture -> frame here)")
@@ -213,6 +220,13 @@ def main():
     cap = open_camera(a.cam, a.width, a.height, a.fps, a.exposure)
     servos = Servos(a.port, a.acc if a.acc is not None else (254 if a.mode == "predict" else 60)) if a.port else None
     laser = Laser(a.nano) if a.nano else None
+    det = None
+    if a.detect:
+        if a.mode != "predict": sys.exit("--detect works in predict mode: add --mode predict")
+        if not os.path.exists(a.detect): sys.exit(f"No {a.detect}: train it with turret_train.py")
+        from turret_predict import Detector
+        det = Detector(a.detect, a.det_conf)
+    acq = []                                         # detector: recent best detections while searching
     if a.blaster:
         if not laser: sys.exit("--blaster needs --nano (the ESP32's port)")
         laser.blaster = True
@@ -266,6 +280,20 @@ def main():
 
             locked = False
             hud = dict(box=None, lead=None, err=None, rate=None, range=None); tracking = steady = found_now = False
+            if mode == "predict" and aim is None and det is not None and angle_hist:
+                # searching: start on a drone the detector is sure of, seen in the same spot 3 frames running
+                d = [x for x in det(raw) if x[1] >= a.acquire]
+                if d:
+                    b, c = max(d, key=lambda x: x[1]); cx, cy = b[0] + b[2] / 2, b[1] + b[3] / 2
+                    if acq and math.hypot(cx - acq[-1][0], cy - acq[-1][1]) > 0.1 * W: acq.clear()
+                    acq.append((cx, cy, b))
+                    if len(acq) >= 3:
+                        from turret_predict import Predictive
+                        pm0, tm0 = angle_at(angle_hist, t_frame - a.latency)
+                        aim = Predictive(lens, "YOLO", detector=det); aim.start(raw, b, pm0, tm0)
+                        tname = aim.name; rng_est = None; acq.clear()
+                else:
+                    acq.clear()
             if mode == "predict" and aim is not None and angle_hist:
                 t_cap = t_frame - a.latency
                 pm, tm = angle_at(angle_hist, t_cap)               # where the turret pointed when the frame was taken
@@ -274,7 +302,7 @@ def main():
                 goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
                 if goal is not None and max(abs(aim.kp.x[1]), abs(aim.kt.x[1])) > 300:
                     goal = None                                      # runaway (target "moving" > 300 deg/s): let go
-                    print("predict: target estimate ran away, dropped it - press C to pick again")
+                    print("predict: target estimate ran away, dropped it" + (" - searching" if det else " - press C to pick again"))
                 if aim is not None and aim.box is not None:          # range from how big the drone looks
                     half_px = max(aim.box[2], aim.box[3]) / 2
                     if half_px > 1:
@@ -344,6 +372,9 @@ def main():
             hud.update(state=state, reason=fc.reason, hold_ms=fc.hold_ms, armed=armed, pan=pan, tilt=tilt, fps=fps_est,
                        tracker=tname.replace("predictive ", "").split(",")[0].strip("()").upper() if tname else "",
                        mode=mode, recording=writer is not None)
+            if det is not None:
+                hud["tracker"] = f"YOLO {det.ms:.0f}MS"
+                if state == "SEARCH": hud["reason"] = "SEARCHING FOR A DRONE" + (f"  ({len(acq)}/3)" if acq else "")
             cv2.imshow(win, turret_hud.draw(frame, hud, out_w=max(1280, W)))
             k = cv2.waitKey(1) & 0xFF
             if k in (ord("q"), 27): break

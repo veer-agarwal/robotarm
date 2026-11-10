@@ -154,6 +154,31 @@ def darker_than_surroundings(g, box, margin=40):
 
 
 # ---------------------------------------------------------------- the aimer
+class Detector:
+    """The trained Tello detector (turret_train.py -> models/tello.pt). det(frame) -> [((x, y, w, h), score), ...]
+    in full-picture pixels. ~5-8 ms a frame on the RTX 2070 Super at 640 px; .ms keeps a running average."""
+
+    def __init__(self, path, conf=0.35, imgsz=640):
+        import torch
+        from ultralytics import YOLO
+        self.m, self.conf, self.imgsz = YOLO(path), conf, imgsz
+        self.dev = 0 if torch.cuda.is_available() else "cpu"
+        self.half = self.dev == 0
+        self.ms = 0.0
+        self(np.zeros((720, 1280, 3), np.uint8))           # first call loads CUDA kernels (~1 s); do it before tracking
+        print(f"detector {path} on {'GPU' if self.half else 'CPU (slow)'}")
+
+    def __call__(self, frame):
+        import time
+        if frame.ndim == 2: frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        t = time.perf_counter()
+        r = self.m.predict(frame, imgsz=self.imgsz, conf=self.conf, device=self.dev, half=self.half,
+                           max_det=10, verbose=False)[0]
+        self.ms = 0.9 * self.ms + 0.1 * 1000 * (time.perf_counter() - t)
+        return [((float(x0), float(y0), float(x1 - x0), float(y1 - y0)), float(c))
+                for (x0, y0, x1, y1), c in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy())]
+
+
 class Predictive:
     """tracker:
       "AUTO"      BLOB if the picked target is clearly darker than what's around it, else TEMPLATE. Default.
@@ -163,11 +188,14 @@ class Predictive:
       "BLOB"      a target darker than what's behind it (~2 ms). Same search window; learns how dark the target is;
                   falls back to the template when it crosses something just as dark.
       "CSRT"      OpenCV's tracker (~10-20 ms). Searches near its last box in the picture, so a fast slew loses it.
+      "YOLO"      the trained drone detector (pass detector=Detector(...)). Looks at the whole picture every frame and
+                  takes the drone nearest to where the filter expects it, so slews and clutter can't make it drift.
 
     update(frame, t_cap, pan_at_capture, tilt_at_capture, t_now) -> ((pan_goal, tilt_goal) or None, locked)"""
 
-    def __init__(self, cam, tracker="CSRT", lead=0.03, q=2e6, give_up=30, gate=8.0, name=None):
+    def __init__(self, cam, tracker="CSRT", lead=0.03, q=2e6, give_up=30, gate=8.0, name=None, detector=None):
         self.cam, self.kind, self.lead, self.q, self.give_up, self.gate = cam, tracker.upper(), lead, q, give_up, gate
+        self.det = detector; self.dets = []
         self.name = name or f"predictive ({self.kind} + Kalman, lead {lead * 1000:.0f} ms)"
         self.kp = self.kt = None; self.box = None; self.misses = 0
 
@@ -183,7 +211,9 @@ class Predictive:
             self.kind = "BLOB" if darker_than_surroundings(gray(frame), box) else "TEMPLATE"
             self.name = self.name.replace("AUTO", f"auto: {self.kind.lower()}")
         self.need, self.need_anchor, self.blend = 0.55, 0.4, 0.05
-        if self.kind in ("BLOB", "TEMPLATE"):
+        if self.kind == "YOLO":
+            self.k = 1.0; self.full_cam = self.small_cam = self.cam
+        elif self.kind in ("BLOB", "TEMPLATE"):
             # matching a 380-px template over a 1000-px window takes ~100 ms; shrink the picture for big targets
             self.k = min(1.0, TRACK_PX / max(1, max(box[2], box[3])))
             self.full_cam, self.small_cam = self.cam, Scaled(self.cam, self.k)
@@ -220,6 +250,16 @@ class Predictive:
                 self.trk = make_cv_tracker(self.kind); self.trk.init(bgr(small), tuple(int(v) for v in found))
                 return tuple(v / self.k for v in found), found
         return None, None
+
+    def _detect(self, frame, pan, tilt):
+        """Every drone the detector sees this frame; keep the one nearest where the filter expects the target."""
+        self.dets = self.det(frame)
+        best, bd = None, 1e9
+        for b, c in self.dets:
+            zp, zt = pixel_bearing(self.cam, pan, tilt, b[0] + b[2] / 2, b[1] + b[3] / 2)
+            d = math.hypot((zp - self.kp.x[0] + 180) % 360 - 180, zt - self.kt.x[0])
+            if d < bd: best, bd = b, d
+        return best
 
     def size_px(self):
         """Smoothed target size in full-picture pixels (steadier than one frame's box)."""
@@ -353,7 +393,9 @@ class Predictive:
     def update(self, frame, t_cap, pan_meas, tilt_meas, t_now):
         self.kp.predict_to(t_cap); self.kt.predict_to(t_cap)
         b_small = None
-        if self.kind in ("BLOB", "TEMPLATE"):
+        if self.kind == "YOLO":
+            b = self._detect(frame, pan_meas, tilt_meas); ok = b is not None
+        elif self.kind in ("BLOB", "TEMPLATE"):
             fn = self._blob if self.kind == "BLOB" else self._template
             b, b_small = self._run_small(fn, frame, pan_meas, tilt_meas, t_cap); ok = b is not None
         else:
@@ -363,8 +405,10 @@ class Predictive:
             zp, zt = pixel_bearing(self.cam, pan_meas, tilt_meas, cx, cy)
             zp = self.kp.x[0] + ((zp - self.kp.x[0] + 180) % 360 - 180)
             sz = max(b_small[2], b_small[3]) if b_small is not None else max(b[2], b[3])
-            if self.hits < WARMUP:
+            if self.hits < WARMUP and self.kind != "YOLO":
                 pass                                               # the picked box is rough: learn the real size first
+            elif self.kind == "YOLO" and math.hypot(zp - self.kp.x[0], zt - self.kt.x[0]) > self.gate:
+                ok = False                                         # a different drone / a false alarm: not ours
             elif self.size > 4 and not (self.size / 2.2 <= sz <= self.size * 2.2):
                 ok = False                                         # a speck or a big blob: not the same target
             elif math.hypot(zp - self.kp.x[0], zt - self.kt.x[0]) > self.gate:
