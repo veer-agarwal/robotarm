@@ -59,6 +59,7 @@ class Scaled:
         self.fisheye = getattr(cam, "fisheye", False)
 
 
+CSRT_PX = 64          # CSRT works on a picture shrunk so the target is about this many pixels across
 WARMUP = 6            # the first detections after C set the target's real size (the drawn box is only a guess)
 COAST_DAMP = 0.75      # while the target is missing, its estimated speed shrinks by this much every frame
 TRACK_PX = 40          # big targets get tracked on a picture shrunk so they're about this many pixels across
@@ -165,7 +166,7 @@ class Predictive:
 
     update(frame, t_cap, pan_at_capture, tilt_at_capture, t_now) -> ((pan_goal, tilt_goal) or None, locked)"""
 
-    def __init__(self, cam, tracker="AUTO", lead=0.03, q=2e6, give_up=30, gate=8.0, name=None):
+    def __init__(self, cam, tracker="CSRT", lead=0.03, q=2e6, give_up=30, gate=8.0, name=None):
         self.cam, self.kind, self.lead, self.q, self.give_up, self.gate = cam, tracker.upper(), lead, q, give_up, gate
         self.name = name or f"predictive ({self.kind} + Kalman, lead {lead * 1000:.0f} ms)"
         self.kp = self.kt = None; self.box = None; self.misses = 0
@@ -189,7 +190,36 @@ class Predictive:
             self.size = self.size * self.k
             self._learn(self._small(frame), tuple(int(round(v * self.k)) for v in box))
         else:
-            self.trk = make_cv_tracker(self.kind); self.trk.init(bgr(frame), tuple(int(v) for v in box))
+            # CSRT: run it on a picture shrunk so the target is ~CSRT_PX across (its cost grows with target size),
+            # and keep the target's own pixels so a lost target can be found again and CSRT restarted on it
+            self.k = min(1.0, CSRT_PX / max(1, max(box[2], box[3])))
+            self.full_cam, self.small_cam = self.cam, Scaled(self.cam, self.k)
+            self.size = self.size * self.k
+            sb = tuple(int(round(v * self.k)) for v in box)
+            small = self._small(frame)
+            self.trk = make_cv_tracker(self.kind); self.trk.init(bgr(small), sb)
+            self._learn(small, sb)
+
+    def _csrt(self, frame, pan, tilt, t_cap):
+        """CSRT on the shrunk picture. After a few misses, look for the target near where it should be by its own
+        look, and restart CSRT there. Returns (box_full, box_small) or (None, None)."""
+        small = self._small(frame)
+        ok, sb = self.trk.update(bgr(small))
+        if ok:
+            sb = tuple(float(v) for v in sb)
+            if self.misses == 0 or self.hits < WARMUP: self._learn(small, sb, blend=0.05)
+            return tuple(v / self.k for v in sb), sb
+        if self.misses >= 3:
+            self.cam = self.small_cam
+            try:
+                w = self._window(small, pan, tilt, t_cap)
+                found = self._match_inner(w[0], w[1], w[2], w[3], w[4], need=0.5) if w else None
+            finally:
+                self.cam = self.full_cam
+            if found is not None:
+                self.trk = make_cv_tracker(self.kind); self.trk.init(bgr(small), tuple(int(v) for v in found))
+                return tuple(v / self.k for v in found), found
+        return None, None
 
     def size_px(self):
         """Smoothed target size in full-picture pixels (steadier than one frame's box)."""
@@ -327,7 +357,7 @@ class Predictive:
             fn = self._blob if self.kind == "BLOB" else self._template
             b, b_small = self._run_small(fn, frame, pan_meas, tilt_meas, t_cap); ok = b is not None
         else:
-            ok, b = self.trk.update(bgr(frame))
+            b, b_small = self._csrt(frame, pan_meas, tilt_meas, t_cap); ok = b is not None
         if ok:
             cx, cy = b[0] + b[2] / 2, b[1] + b[3] / 2
             zp, zt = pixel_bearing(self.cam, pan_meas, tilt_meas, cx, cy)

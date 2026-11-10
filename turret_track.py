@@ -188,9 +188,9 @@ def main():
     ap.add_argument("--nano", help="Nano for the laser, e.g. COM10")
     ap.add_argument("--mode", choices=["fixed", "follow", "predict"], default="fixed")
     ap.add_argument("--kp", type=float, default=0.35, help="follow mode: fraction of the error corrected per frame")
-    ap.add_argument("--tracker", choices=["auto", "blob", "template", "csrt"], default="auto",
-                    help="predict mode: auto (default) picks blob for a target darker than the background, else template;"
-                         " csrt = OpenCV's, slower and loses the target on fast turret moves")
+    ap.add_argument("--tracker", choices=["csrt", "auto", "blob", "template"], default="csrt",
+                    help="predict mode: csrt (default; best in clutter, re-finds the target after a slip); auto = blob for a"
+                         " target darker than the background, else template (fastest, fine against plain walls)")
     ap.add_argument("--lead", type=float, default=0.03, help="predict mode: seconds to aim ahead (sim best: 0.03)")
     ap.add_argument("--q", type=float, default=2e6, help="predict mode: how fast the target can change direction")
     ap.add_argument("--latency", type=float, default=0.025, help="predict mode: camera delay, seconds (capture -> frame here)")
