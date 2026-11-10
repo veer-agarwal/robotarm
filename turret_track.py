@@ -228,7 +228,9 @@ def main():
     aim = None                                       # predict mode's Predictive
     angle_hist = deque(maxlen=64)                    # (time, pan, tilt) as read from the servos
     lens = None
-    pan = tilt = 0.0; pan_sign, tilt_sign = -1.0, -1.0       # pan servo is flipped in the v2 turret
+    # Directions, checked from a predict-mode log (Nov 10): pan servo + turns the camera RIGHT, tilt servo + turns it UP.
+    # (The old -1 for pan made predict mode chase its own tail: turning toward the target moved it further away.)
+    pan = tilt = 0.0; pan_sign, tilt_sign = 1.0, -1.0
     mode, armed, writer, exposure = a.mode, False, None, a.exposure
     t_prev, fps_est = time.time(), 0.0
     import turret_hud
@@ -268,6 +270,9 @@ def main():
                 flight = (rng_est / a.dart_speed) if (rng_est and a.dart_speed > 0) else 0.0
                 aim.lead = a.lead + flight                          # darts: also lead by their flight time
                 goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
+                if goal is not None and max(abs(aim.kp.x[1]), abs(aim.kt.x[1])) > 400:
+                    goal = None                                      # runaway (target "moving" > 400 deg/s): let go
+                    print("predict: target estimate ran away, dropped it - press C to pick again")
                 if aim is not None and aim.box is not None:          # range from how big the drone looks
                     half_px = max(aim.box[2], aim.box[3]) / 2
                     if half_px > 1:
