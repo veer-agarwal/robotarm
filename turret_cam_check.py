@@ -30,7 +30,6 @@ def open_cam(idx, w, h, fps, mjpg=True):
     if EXPOSURE is not None and backend == "DSHOW":
         # fixed short exposure: on auto, a dim room makes the camera slow its frame rate down (and add delay)
         cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25); cap.set(cv2.CAP_PROP_EXPOSURE, EXPOSURE)
-    cap.backend = backend
     return cap
 
 
@@ -83,7 +82,7 @@ def view(idx, w, h, fps):
         ok, f = cap.read()
         if not ok: break
         t = time.perf_counter(); est = 0.9 * est + 0.1 / max(1e-4, t - t_prev); t_prev = t
-        cv2.putText(f, f"{f.shape[1]}x{f.shape[0]}  {est:5.1f} fps  {getattr(cap, 'backend', '')}   Q quit", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(f, f"{f.shape[1]}x{f.shape[0]}  {est:5.1f} fps  {cap.getBackendName()}   Q quit", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.imshow("camera", f)
         if cv2.waitKey(1) & 0xFF in (ord("q"), 27): break
     cap.release(); cv2.destroyAllWindows()
@@ -160,7 +159,7 @@ def laser_latency(idx, w, h, fps, port, shots=20):
     lo, hi = roi(off), roi(on); mid = (lo + hi) / 2
     n0, t0f = 0, time.perf_counter()
     while time.perf_counter() - t0f < 1.0: cap.read(); n0 += 1
-    print(f"backend {getattr(cap, 'backend', '?')}, camera running at {n0:.0f} fps during the test")
+    print(f"backend {cap.getBackendName()}, camera running at {n0:.0f} fps during the test")
     print(f"laser dot at pixel ({px}, {py}); timing {shots} on/off switches ...")
     res = []
     settle(0.6)

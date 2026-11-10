@@ -15,12 +15,15 @@ ORDER = ["DSHOW", "MSMF", "ANY"] if os.name == "nt" else ["ANY"]
 _last_good = None
 
 
-def _works(cap):
-    try:
-        ok, f = cap.read()
-        return bool(ok) and f is not None
-    except cv2.error:
-        return False
+def _works(cap, tries=10):
+    """The first frames after a format change can fail for a moment: give it a few reads."""
+    for _ in range(tries):
+        try:
+            ok, f = cap.read()
+            if ok and f is not None: return True
+        except cv2.error:
+            return False
+    return False
 
 
 def open_capture(idx, w=None, h=None, fps=None, mjpg=True, prefer=None, quiet=False, retries=3):
