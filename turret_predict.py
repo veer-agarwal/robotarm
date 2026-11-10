@@ -153,8 +153,11 @@ class Predictive:
     # -- BLOB tracker
     def _learn(self, g, box, blend=1.0):
         x, y, w, h = [int(v) for v in box]; m = max(2, int(0.3 * max(w, h)))
-        if x - m < 0 or y - m < 0 or x + w + m > g.shape[1] or y + h + m > g.shape[0]: return   # touching the edge
-        t = g[y - m:y + h + m, x - m:x + w + m].astype(np.float32)
+        x, y = max(0, min(x, g.shape[1] - 2)), max(0, min(y, g.shape[0] - 2))
+        w, h = max(2, min(w, g.shape[1] - x)), max(2, min(h, g.shape[0] - y))
+        # near an edge the margin would fall off the picture: pad with the edge pixels instead of giving up
+        gp = cv2.copyMakeBorder(g, m, m, m, m, cv2.BORDER_REPLICATE)
+        t = gp[y:y + h + 2 * m, x:x + w + 2 * m].astype(np.float32)
         if t.shape[0] < 5 or t.shape[1] < 5: return
         if blend < 1.0 and self.tmpl is not None and self.tmpl[0].shape == t.shape:
             t = (1 - blend) * self.tmpl[0] + blend * t                  # drift slowly toward the new look
