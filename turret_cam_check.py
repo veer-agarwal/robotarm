@@ -60,8 +60,15 @@ def probe(idx):
         print(f"\nfastest: {w}x{h} at {r:.0f} fps.  Use: turret_track.py --cam {idx} --width {w} --height {h} --fps {round(r / 10) * 10} --dfov 130")
 
 
+def need(cap, idx):
+    if cap is None:
+        sys.exit(f"camera {idx} didn't open. Close the Windows Camera app (and anything else using it), "
+                 "unplug and replug the camera, wait 5 s, and try again.")
+    return cap
+
+
 def view(idx, w, h, fps):
-    cap = open_cam(idx, w, h, fps)
+    cap = need(open_cam(idx, w, h, fps), idx)
     t_prev, est = time.perf_counter(), 0.0
     while True:
         ok, f = cap.read()
@@ -74,7 +81,7 @@ def view(idx, w, h, fps):
 
 
 def latency(idx, w, h, fps, flashes=20):
-    cap = open_cam(idx, w, h, fps)
+    cap = need(open_cam(idx, w, h, fps), idx)
     flash = "flash (point the camera here)"
     cv2.namedWindow(flash, cv2.WINDOW_NORMAL); cv2.resizeWindow(flash, 900, 700)
     black = np.zeros((700, 900, 3), np.uint8); white = np.full_like(black, 255)

@@ -23,8 +23,21 @@ def _works(cap):
         return False
 
 
-def open_capture(idx, w=None, h=None, fps=None, mjpg=True, prefer=None, quiet=False):
-    """Return (cap, backend_name), or (None, None). w/h/fps are requests; check cap.get() for what you got."""
+def open_capture(idx, w=None, h=None, fps=None, mjpg=True, prefer=None, quiet=False, retries=3):
+    """Return (cap, backend_name), or (None, None). w/h/fps are requests; check cap.get() for what you got.
+    Retries a few times: right after another program (or this one) lets go of the camera, Windows can report it
+    as missing for a second or two."""
+    import time
+    for attempt in range(retries):
+        cap, name = _open_once(idx, w, h, fps, mjpg, prefer, quiet)
+        if cap is not None: return cap, name
+        if attempt < retries - 1:
+            if not quiet: print(f"camera {idx}: not available yet, retrying ...")
+            time.sleep(1.5)
+    return None, None
+
+
+def _open_once(idx, w, h, fps, mjpg, prefer, quiet):
     global _last_good
     order = list(ORDER)
     for first in (prefer, _last_good):
