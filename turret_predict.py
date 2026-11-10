@@ -265,13 +265,12 @@ class Predictive:
         win, x0, y0, u, v = w
         thr = min(np.median(win) - 40, 80)
         if self.level is not None: thr = min(thr, self.level + 18)      # as dark as the target, not a dim poster
-        n, lab, st, cen = cv2.connectedComponentsWithStats((win < thr).astype(np.uint8), 8)
-        best, bd = None, 1e9
-        for i in range(1, n):
-            a, bw, bh = st[i, cv2.CC_STAT_AREA], st[i, cv2.CC_STAT_WIDTH], st[i, cv2.CC_STAT_HEIGHT]
-            if a < 3 or max(bw, bh) > 2.0 * self.size + 4: continue    # specks, or merged with something big
-            dd = (cen[i][0] + x0 - u) ** 2 + (cen[i][1] + y0 - v) ** 2
-            if dd < bd: bd, best = dd, i
+        mask = (win < thr).astype(np.uint8)
+        best, st = self._nearest_ok(mask, x0, y0, u, v)
+        if best is None and mask.any():
+            # the target touches something dark (a hand, a bed edge): cut thin joins and look again
+            k = max(3, int(self.size / 3)) | 1
+            best, st = self._nearest_ok(cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((k, k), np.uint8)), x0, y0, u, v)
         if best is not None:
             x, y, w, h = st[best, :4]
             box = (int(x + x0), int(y + y0), int(w), int(h))
@@ -281,7 +280,18 @@ class Predictive:
         # using only the target's pixels (no background) and preferring spots near where it should be
         return self._match_inner(win, x0, y0, u, v)
 
-    def _match_inner(self, win, x0, y0, u, v, need=0.55):
+    def _nearest_ok(self, mask, x0, y0, u, v):
+        """Dark shape nearest the predicted spot that's about the target's size; (index, stats) or (None, stats)."""
+        n, lab, st, cen = cv2.connectedComponentsWithStats(mask, 8)
+        best, bd = None, 1e9
+        for i in range(1, n):
+            a, bw, bh = st[i, cv2.CC_STAT_AREA], st[i, cv2.CC_STAT_WIDTH], st[i, cv2.CC_STAT_HEIGHT]
+            if a < 3 or max(bw, bh) > 2.0 * self.size + 4: continue    # specks, or merged with something big
+            dd = (cen[i][0] + x0 - u) ** 2 + (cen[i][1] + y0 - v) ** 2
+            if dd < bd: bd, best = dd, i
+        return best, st
+
+    def _match_inner(self, win, x0, y0, u, v, need=0.45):
         t = getattr(self, "inner", None)
         if t is None or t.shape[0] >= win.shape[0] or t.shape[1] >= win.shape[1]: return None
         if float(t.std()) < 2.0: return None                             # featureless: a match would mean nothing
