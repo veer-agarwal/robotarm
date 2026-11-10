@@ -200,6 +200,7 @@ def main():
                     help="m/s; 0 = laser (no drop). With darts (~30) it aims up for drop and leads for flight time")
     ap.add_argument("--mask", help="ignore part of the picture, fractions x0,y0,x1,y1 (e.g. the laser block: 0.4,0.85,0.6,1)")
     ap.add_argument("--blaster", action="store_true", help="the --nano ESP32 also drives the rev/fire relays")
+    ap.add_argument("--log", action="store_true", help="predict mode: write recordings/track_log_<time>.csv for tuning")
     a = ap.parse_args()
     if a.mode == "predict" and not a.port:
         sys.exit("predict mode reads the servo angles, so it needs --port (e.g. --port COM9).")
@@ -215,6 +216,12 @@ def main():
         laser.blaster = True
     mask = [float(v) for v in a.mask.split(",")] if a.mask else None
     rng_est = None                                   # filtered range to the target, metres
+    log = None
+    if a.log:
+        os.makedirs("recordings", exist_ok=True)
+        log = open(os.path.join("recordings", time.strftime("track_log_%Y%m%d_%H%M%S.csv")), "w")
+        log.write("t,t_cap,pan_meas,tilt_meas,found,box_x,box_y,box_w,box_h,kf_pan,kf_pan_v,kf_tilt,kf_tilt_v,goal_pan,goal_tilt,"
+                  "servo_pan_cmd,servo_tilt_cmd,servo_pan_now,servo_tilt_now\n")
     os.makedirs("recordings", exist_ok=True)
 
     tracker, tname, box = None, "", None
@@ -280,6 +287,12 @@ def main():
                     pan = float(np.clip(-pan_sign * goal[0], *LIMITS[PAN_ID]))
                     tilt = float(np.clip(-tilt_sign * goal[1], *LIMITS[TILT_ID]))
                     servos.goto(pan, tilt)
+                    if log:
+                        b_ = aim.box if aim.box is not None else (float("nan"),) * 4
+                        _, pn_, tn_ = angle_hist[-1]
+                        log.write(",".join(f"{v:.4f}" for v in (
+                            time.perf_counter(), t_cap, pm, tm, float(aim.misses == 0), *b_, aim.kp.x[0], aim.kp.x[1],
+                            aim.kt.x[0], aim.kt.x[1], goal[0], goal[1], pan, tilt, pn_, tn_)) + "\n")
                     from turret_predict import world_to_pixel
                     t_n = time.perf_counter()
                     _, p_now, t_now_ = angle_hist[-1]
@@ -363,6 +376,7 @@ def main():
     finally:
         if writer is not None: writer.release()
         if laser: laser.close()
+        if log: log.close(); print("log written to recordings/")
         if servos: servos.goto(0, 0); time.sleep(0.5); servos.release()
         cap.release(); cv2.destroyAllWindows()
 
