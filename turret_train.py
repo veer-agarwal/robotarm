@@ -1,6 +1,6 @@
 """Train the Tello detector on datasets/tello (made by turret_label.py) and export it for turret_track.py.
 
-    python turret_train.py              # yolo11n, 80 epochs, 640 px
+    python turret_train.py              # yolo11n, 50 epochs, 640 px, keeps the final epoch
     python turret_train.py --epochs 120 --model yolo11s.pt
     python turret_train.py --review     # no training: run models/tello.pt on the val clip, save runs/review_<name>.jpg
                                         # e.g. --review --weights runs\\detect\\runs\\tello\\weights\\best.pt runs\\detect\\runs\\tello\\weights\\last.pt
@@ -18,7 +18,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=os.path.join("datasets", "tello", "data.yaml"))
     ap.add_argument("--model", default="yolo11n.pt", help="yolo11n.pt (fastest) or yolo11s.pt (a bit better, ~2x slower)")
-    ap.add_argument("--epochs", type=int, default=80)
+    ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--review", action="store_true", help="skip training; check models/tello.pt on the val images")
@@ -44,9 +44,11 @@ def main():
     model.train(data=os.path.abspath(a.data), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch if gpu else 8,
                 device=0 if gpu else "cpu", workers=2, project="runs", name="tello", exist_ok=True,
                 hsv_h=0.0, hsv_s=0.0, hsv_v=0.4, degrees=5.0, flipud=0.0, fliplr=0.5, mosaic=1.0,
-                close_mosaic=10, patience=25, plots=True)
+                close_mosaic=10, patience=0, plots=True)
 
-    best = os.path.join(str(model.trainer.save_dir), "weights", "best.pt")   # ultralytics picks the folder (runs/detect/...)
+    # keep the LAST epoch, not ultralytics' "best": with one held-out clip the val score swings from epoch to epoch and
+    # twice picked epoch 1-3, whose scores are too low to use (the last one found 90% at 0.5 vs 13% for "best")
+    best = os.path.join(str(model.trainer.save_dir), "weights", "last.pt")   # ultralytics picks the folder (runs/detect/...)
     os.makedirs("models", exist_ok=True)
     shutil.copy(best, os.path.join("models", "tello.pt"))
     m = YOLO(best)
@@ -55,7 +57,7 @@ def main():
     onnx = m.export(format="onnx", imgsz=a.imgsz, dynamic=False, simplify=True)
     shutil.copy(onnx, os.path.join("models", "tello.onnx"))
     print("saved models/tello.pt and models/tello.onnx")
-    review(m, os.path.dirname(a.data), 0 if gpu else "cpu", a.imgsz, "review_best")
+    review(m, os.path.dirname(a.data), 0 if gpu else "cpu", a.imgsz, "review_final")
 
 
 def iou(a, b):
