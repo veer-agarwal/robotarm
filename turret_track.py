@@ -221,7 +221,7 @@ def main():
     log = None
     if a.log:
         os.makedirs("recordings", exist_ok=True)
-        log = open(os.path.join("recordings", time.strftime("track_log_%Y%m%d_%H%M%S.csv")), "w")
+        log = open(os.path.join("recordings", time.strftime("track_log_%Y%m%d_%H%M%S.csv")), "w", buffering=1)
         log.write("t,t_cap,pan_meas,tilt_meas,found,box_x,box_y,box_w,box_h,kf_pan,kf_pan_v,kf_tilt,kf_tilt_v,goal_pan,goal_tilt,"
                   "servo_pan_cmd,servo_tilt_cmd,servo_pan_now,servo_tilt_now\n")
     os.makedirs("recordings", exist_ok=True)

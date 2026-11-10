@@ -59,6 +59,7 @@ class Scaled:
         self.fisheye = getattr(cam, "fisheye", False)
 
 
+WARMUP = 6            # the first detections after C set the target's real size (the drawn box is only a guess)
 COAST_DAMP = 0.75      # while the target is missing, its estimated speed shrinks by this much every frame
 TRACK_PX = 40          # big targets get tracked on a picture shrunk so they're about this many pixels across
 
@@ -127,6 +128,21 @@ def gray(frame):
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
 
 
+def tighten(g, box, margin=35):
+    """The box drawn with C is usually loose. If it holds one clearly dark shape, shrink the box to that shape."""
+    x, y, w, h = [int(v) for v in box]
+    x, y = max(0, x), max(0, y); w, h = min(w, g.shape[1] - x), min(h, g.shape[0] - y)
+    roi = g[y:y + h, x:x + w]
+    if roi.size < 16: return box
+    thr = float(np.median(roi)) - margin
+    n, lab, st, _ = cv2.connectedComponentsWithStats((roi < thr).astype(np.uint8), 8)
+    if n < 2: return box
+    i = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+    bx, by, bw, bh, area = st[i]
+    if area < 0.05 * w * h or area < 12: return box
+    return (x + int(bx), y + int(by), int(bw), int(bh))
+
+
 def darker_than_surroundings(g, box, margin=40):
     """True if the inside of box is clearly darker than a ring around it (then the BLOB tracker works)."""
     x, y, w, h = [int(v) for v in box]; m = max(4, max(w, h))
@@ -155,10 +171,12 @@ class Predictive:
         self.kp = self.kt = None; self.box = None; self.misses = 0
 
     def start(self, frame, box, pan, tilt):
+        if self.kind in ("AUTO", "BLOB"):
+            box = tighten(gray(frame), box)
         cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
         bp, bt = pixel_bearing(self.cam, pan, tilt, cx, cy)
         self.kp, self.kt = KF1(bp, self.q), KF1(bt, self.q)
-        self.size = max(box[2], box[3]); self.box = box; self.misses = 0
+        self.size = max(box[2], box[3]); self.box = box; self.misses = 0; self.hits = 0
         self.tmpl = None; self.level = None; self.anchor = None
         if self.kind == "AUTO":
             self.kind = "BLOB" if darker_than_surroundings(gray(frame), box) else "TEMPLATE"
@@ -284,14 +302,18 @@ class Predictive:
             zp, zt = pixel_bearing(self.cam, pan_meas, tilt_meas, cx, cy)
             zp = self.kp.x[0] + ((zp - self.kp.x[0] + 180) % 360 - 180)
             sz = max(b_small[2], b_small[3]) if b_small is not None else max(b[2], b[3])
-            if self.size > 4 and not (self.size / 2.2 <= sz <= self.size * 2.2):
+            if self.hits < WARMUP:
+                pass                                               # the picked box is rough: learn the real size first
+            elif self.size > 4 and not (self.size / 2.2 <= sz <= self.size * 2.2):
                 ok = False                                         # a speck or a big blob: not the same target
             elif math.hypot(zp - self.kp.x[0], zt - self.kt.x[0]) > self.gate:
                 ok = False                                         # a jump no drone can make: tracker slipped
         if ok:
             self.misses = 0; self.box = b
             self.kp.correct(zp); self.kt.correct(zt)
-            self.size = 0.85 * self.size + 0.15 * sz
+            self.size = sz if self.hits == 0 else (0.6 if self.hits < WARMUP else 0.85) * self.size + \
+                (0.4 if self.hits < WARMUP else 0.15) * sz
+            self.hits += 1
         else:
             self.misses += 1; self.box = None
             self.kp.x[1] *= COAST_DAMP; self.kt.x[1] *= COAST_DAMP   # don't fling the turret along a guess
