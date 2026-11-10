@@ -31,11 +31,20 @@ def bearing(p):
 
 
 class Lens:
-    """Pinhole model: w x h picture, focal length f in pixels. Build it from a horizontal FOV or a diagonal FOV."""
+    """w x h picture, focal length f in pixels.
+    fisheye=False: pinhole (straight lines stay straight), angle = atan(r / f).
+    fisheye=True:  equidistant fisheye, angle = r / f. Wide M12 lenses like the Arducam 130 deg are close to this:
+                   accurate near the centre AND at the edges, where the pinhole model is off by up to ~10 deg.
+    Give focal (px, e.g. from turret_cam_check --fov), or hfov / diag_fov."""
 
-    def __init__(self, w, h, hfov=None, diag_fov=None):
+    def __init__(self, w, h, hfov=None, diag_fov=None, focal=None, fisheye=False):
         self.w, self.h, self.cx, self.cy = w, h, w / 2, h / 2
-        if diag_fov is not None:
+        self.fisheye = fisheye
+        if focal is not None:
+            self.f = focal
+        elif fisheye:
+            self.f = (w / 2) / math.radians(hfov / 2)
+        elif diag_fov is not None:
             self.f = math.hypot(w, h) / 2 / math.tan(math.radians(diag_fov / 2))
         else:
             self.f = w / 2 / math.tan(math.radians(hfov / 2))
@@ -47,6 +56,7 @@ class Scaled:
     def __init__(self, cam, k):
         self.w, self.h = int(round(cam.w * k)), int(round(cam.h * k))
         self.f, self.cx, self.cy = cam.f * k, cam.cx * k, cam.cy * k
+        self.fisheye = getattr(cam, "fisheye", False)
 
 
 COAST_DAMP = 0.75      # while the target is missing, its estimated speed shrinks by this much every frame
@@ -55,12 +65,27 @@ TRACK_PX = 40          # big targets get tracked on a picture shrunk so they're 
 
 def pixel_bearing(cam, pan, tilt, px, py):
     """World (pan, tilt) of the ray through pixel (px, py) when the turret points at (pan, tilt)."""
-    return bearing(rot(pan, tilt) @ np.array([cam.f, -(px - cam.cx), -(py - cam.cy)]))
+    dx, dy = px - cam.cx, py - cam.cy
+    if getattr(cam, "fisheye", False):
+        r = math.hypot(dx, dy)
+        th = r / cam.f
+        s = math.sin(th) / r if r > 1e-9 else 1.0 / cam.f
+        ray = np.array([math.cos(th), -dx * s, -dy * s])
+    else:
+        ray = np.array([cam.f, -dx, -dy])
+    return bearing(rot(pan, tilt) @ ray)
 
 
 def world_to_pixel(cam, pan, tilt, bp, bt):
     """Where world direction (bp, bt) lands in the picture when the turret points at (pan, tilt); None if behind."""
     c = rot(pan, tilt).T @ rot(bp, bt)[:, 0]
+    if getattr(cam, "fisheye", False):
+        side = math.hypot(c[1], c[2])
+        th = math.atan2(side, c[0])
+        if th > math.radians(100): return None
+        if side < 1e-9: return cam.cx, cam.cy
+        r = cam.f * th
+        return cam.cx - r * c[1] / side, cam.cy - r * c[2] / side
     if c[0] <= 0.05: return None
     return cam.cx - cam.f * c[1] / c[0], cam.cy - cam.f * c[2] / c[0]
 

@@ -181,6 +181,8 @@ def main():
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--exposure", type=float, default=-6, help="DirectShow log2 seconds: -6 = 1/64 s, -8 = 1/256 s")
     ap.add_argument("--hfov", type=float, default=70.0, help="camera horizontal field of view, degrees")
+    ap.add_argument("--focal", type=float, help="focal length in pixels (turret_cam_check --fov measures it; Arducam at 1280x720: 641)")
+    ap.add_argument("--fisheye", action="store_true", help="wide-angle lens (Arducam 130 deg): angle grows evenly toward the edges")
     ap.add_argument("--dfov", type=float, help="diagonal field of view instead (Arducam 130 deg lens: --dfov 130)")
     ap.add_argument("--port", help="turret servo board, e.g. COM9 (omit for camera-only)")
     ap.add_argument("--nano", help="Nano for the laser, e.g. COM10")
@@ -254,7 +256,7 @@ def main():
             vfov = a.hfov * H / W
             if lens is None or (lens.w, lens.h) != (W, H):
                 from turret_predict import Lens
-                lens = Lens(W, H, hfov=a.hfov, diag_fov=a.dfov)
+                lens = Lens(W, H, hfov=a.hfov, diag_fov=a.dfov, focal=a.focal, fisheye=a.fisheye)
             if mode == "predict" and servos:
                 r = servos.read_deg()
                 if r is not None:                                 # store in the predictor's convention (+ = left / up)
