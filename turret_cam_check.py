@@ -181,6 +181,48 @@ def laser_latency(idx, w, h, fps, port, shots=20):
     print(f"use: turret_track.py --latency {np.median(r_) / 1000 - 0.004:.3f}   (half a frame taken off: the frame is exposed before it arrives)")
 
 
+def diagnose(idx, w, h, fps):
+    """Try every known way of opening the camera in this mode and report format + real frame rate for each."""
+    from camopen import fourcc
+    M = cv2.VideoWriter_fourcc(*"MJPG")
+    F, W_, H_, R = cv2.CAP_PROP_FOURCC, cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT, cv2.CAP_PROP_FPS
+    recipes = [
+        ("DSHOW  fourcc,size,fps", cv2.CAP_DSHOW, None, [(F, M), (W_, w), (H_, h), (R, fps)]),
+        ("DSHOW  size,fourcc,fps", cv2.CAP_DSHOW, None, [(W_, w), (H_, h), (F, M), (R, fps)]),
+        ("DSHOW  fps,fourcc,size", cv2.CAP_DSHOW, None, [(R, fps), (F, M), (W_, w), (H_, h)]),
+        ("DSHOW  open-params", cv2.CAP_DSHOW, [F, M, W_, w, H_, h, R, fps], []),
+        ("MSMF   open-params size,fps", cv2.CAP_MSMF, [W_, w, H_, h, R, fps], []),
+        ("MSMF   open-params size", cv2.CAP_MSMF, [W_, w, H_, h], []),
+        ("MSMF   plain, set size", cv2.CAP_MSMF, None, [(W_, w), (H_, h)]),
+    ]
+    print(f"camera {idx}, asking for {w}x{h} @ {fps}. Keep the room lights on. Each recipe takes a few seconds.\n")
+    for label, api, params, sets in recipes:
+        try:
+            cap = cv2.VideoCapture(idx, api, params) if params else cv2.VideoCapture(idx, api)
+        except cv2.error as e:
+            print(f"  {label:30s} open error"); time.sleep(2); continue
+        if not cap.isOpened():
+            print(f"  {label:30s} did not open"); time.sleep(2); continue
+        for prop, val in sets:
+            cap.set(prop, val)
+        got, t0, ok_any = 0, None, False
+        t_start = time.perf_counter()
+        while time.perf_counter() - t_start < 4.0:
+            try:
+                ok, f = cap.read()
+            except cv2.error:
+                ok = False
+            if ok:
+                ok_any = True
+                if t0 is None: t0 = time.perf_counter()
+                else: got += 1
+                if time.perf_counter() - t0 > 1.5: break
+        rate = got / (time.perf_counter() - t0) if t0 and got else 0.0
+        size = f"{int(cap.get(3))}x{int(cap.get(4))}"
+        print(f"  {label:30s} {'frames' if ok_any else 'NO FRAMES':9s} {size:>9s} {fourcc(cap):5s} {rate:6.1f} fps")
+        cap.release(); time.sleep(2.0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cam", type=int, default=0)
@@ -188,10 +230,12 @@ def main():
     ap.add_argument("--fps", type=int, default=120)
     ap.add_argument("--view", action="store_true"); ap.add_argument("--latency", action="store_true")
     ap.add_argument("--laser-latency", action="store_true"); ap.add_argument("--nano", default="COM11")
+    ap.add_argument("--diagnose", action="store_true", help="try every way of opening the camera; report fps for each")
     ap.add_argument("--exposure", type=float, help="fixed exposure, DirectShow log2 seconds (-8 = 1/256 s, -9 = 1/512 s); default auto")
     a = ap.parse_args()
     global EXPOSURE; EXPOSURE = a.exposure
-    if a.view: view(a.cam, a.width, a.height, a.fps)
+    if a.diagnose: diagnose(a.cam, a.width, a.height, a.fps)
+    elif a.view: view(a.cam, a.width, a.height, a.fps)
     elif a.latency: latency(a.cam, a.width, a.height, a.fps)
     elif a.laser_latency: laser_latency(a.cam, a.width, a.height, a.fps, a.nano)
     else: probe(a.cam)
