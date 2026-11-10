@@ -18,9 +18,9 @@ def main() -> None:
     wanted = [int(a) for a in sys.argv[1:]] or [0, 1, 2, 3]
     caps = {}
     for i in wanted:
-        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)  # DirectShow is the reliable backend on Windows
-        if not cap.isOpened():
-            cap.release()
+        from camopen import open_capture   # DirectShow first, then Media Foundation if DirectShow can't open it
+        cap, _ = open_capture(i, quiet=True)
+        if cap is None:
             continue
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)

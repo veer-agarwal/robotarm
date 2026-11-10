@@ -74,8 +74,9 @@ def make_tracker():
 
 
 def open_camera(idx, w, h, fps, exposure):
-    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(idx)
-    if not cap.isOpened():
+    from camopen import open_capture
+    cap, backend = open_capture(idx)
+    if cap is None:
         sys.exit(f"Camera {idx} didn't open. Try --cam 1 (or 2), and close other apps using it.")
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, w); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h); cap.set(cv2.CAP_PROP_FPS, fps)

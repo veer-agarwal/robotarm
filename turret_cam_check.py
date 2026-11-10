@@ -18,8 +18,9 @@ MODES = [(1280, 800, 120), (1280, 720, 120), (640, 400, 120), (640, 480, 120), (
 
 
 def open_cam(idx, w, h, fps, mjpg=True):
-    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(idx)
-    if not cap.isOpened(): return None
+    from camopen import open_capture
+    cap, _ = open_capture(idx, quiet=True)
+    if cap is None: return None
     if mjpg: cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, w); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h); cap.set(cv2.CAP_PROP_FPS, fps)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -115,7 +116,7 @@ def latency(idx, w, h, fps, flashes=20):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cam", type=int, default=1)
+    ap.add_argument("--cam", type=int, default=0)
     ap.add_argument("--width", type=int, default=640); ap.add_argument("--height", type=int, default=400)
     ap.add_argument("--fps", type=int, default=120)
     ap.add_argument("--view", action="store_true"); ap.add_argument("--latency", action="store_true")

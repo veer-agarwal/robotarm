@@ -38,7 +38,10 @@ def main() -> None:
 
     cap = None
     if args.cam >= 0:
-        cap = cv2.VideoCapture(args.cam, cv2.CAP_DSHOW)
+        from camopen import open_capture
+        cap, _ = open_capture(args.cam)
+        if cap is None:
+            cap = cv2.VideoCapture(args.cam)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480); cap.set(cv2.CAP_PROP_FPS, 30)
         if not cap.isOpened():
             cap = None
