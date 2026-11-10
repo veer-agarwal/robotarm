@@ -224,6 +224,51 @@ def diagnose(idx, w, h, fps):
         cap.release(); time.sleep(2.0)
 
 
+def measure_fov(idx, w, h, fps, port, step=8.0):
+    """Turn the turret a known amount and see how far the picture moves: gives the real field of view (and checks
+    which way each servo turns). Point it at a scene with some detail, not a blank wall, and keep things still."""
+    import math
+    from turret_track import Servos
+    cap = need(open_cam(idx, w, h, fps), idx)
+    servos = Servos(port, acc=60)
+
+    def still(pan, tilt):
+        servos.goto(pan, tilt)
+        t = time.perf_counter()
+        while time.perf_counter() - t < 1.2: cap.read()            # let it get there and stop shaking
+        fr = [cv2.cvtColor(cap.read()[1], cv2.COLOR_BGR2GRAY).astype(np.float32) for _ in range(3)]
+        return np.mean(fr, axis=0)
+
+    win = None
+    def shift(a, b):
+        nonlocal win
+        if win is None: win = cv2.createHanningWindow(a.shape[::-1], cv2.CV_32F)
+        (dx, dy), resp = cv2.phaseCorrelate(a, b, win)
+        return dx, dy, resp
+
+    print(f"turning the turret {step:g} deg each way and measuring how far the picture moves ...")
+    base = still(0, 0)
+    fs = {}
+    for axis, (p, t) in (("pan", (step, 0)), ("tilt", (0, step))):
+        moved = still(p, t)
+        dx, dy, resp = shift(base, moved)
+        px = dx if axis == "pan" else dy
+        f = abs(px) / math.tan(math.radians(step))
+        fs[axis] = f
+        way = ("right" if dx < 0 else "left") if axis == "pan" else ("up" if dy > 0 else "down")
+        print(f"  {axis}: servo +{step:g} deg moved the picture {px:+.0f} px  -> focal length {f:.0f} px; "
+              f"servo + turns the camera {way}  (match quality {resp:.2f})")
+        base = still(0, 0)
+    servos.goto(0, 0); time.sleep(0.8); servos.release(); cap.release()
+    f = (fs["pan"] + fs["tilt"]) / 2
+    W, H = int(cap.get(3)) or w, int(cap.get(4)) or h
+    hfov = math.degrees(2 * math.atan(w / 2 / f))
+    print(f"\nfocal length about {f:.0f} px at {w}x{h}: horizontal field of view {hfov:.0f} deg")
+    print(f"use: turret_track.py ... --width {w} --height {h} --hfov {hfov:.0f}")
+    if min(fs.values()) > 0 and abs(fs["pan"] - fs["tilt"]) / f > 0.15:
+        print("(pan and tilt disagree by more than 15%: something in view moved, or the scene has too little detail. Run it again.)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cam", type=int, default=0)
@@ -232,10 +277,13 @@ def main():
     ap.add_argument("--view", action="store_true"); ap.add_argument("--latency", action="store_true")
     ap.add_argument("--laser-latency", action="store_true"); ap.add_argument("--nano", default="COM11")
     ap.add_argument("--diagnose", action="store_true", help="try every way of opening the camera; report fps for each")
+    ap.add_argument("--fov", action="store_true", help="measure the real field of view by turning the turret (needs --port)")
+    ap.add_argument("--port", default="COM9", help="turret servo board, for --fov")
     ap.add_argument("--exposure", type=float, help="fixed exposure, DirectShow log2 seconds (-8 = 1/256 s, -9 = 1/512 s); default auto")
     a = ap.parse_args()
     global EXPOSURE; EXPOSURE = a.exposure
     if a.diagnose: diagnose(a.cam, a.width, a.height, a.fps)
+    elif a.fov: measure_fov(a.cam, a.width, a.height, a.fps, a.port)
     elif a.view: view(a.cam, a.width, a.height, a.fps)
     elif a.latency: latency(a.cam, a.width, a.height, a.fps)
     elif a.laser_latency: laser_latency(a.cam, a.width, a.height, a.fps, a.nano)
