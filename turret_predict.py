@@ -49,6 +49,7 @@ class Scaled:
         self.f, self.cx, self.cy = cam.f * k, cam.cx * k, cam.cy * k
 
 
+COAST_DAMP = 0.75      # while the target is missing, its estimated speed shrinks by this much every frame
 TRACK_PX = 40          # big targets get tracked on a picture shrunk so they're about this many pixels across
 
 
@@ -123,7 +124,7 @@ class Predictive:
 
     update(frame, t_cap, pan_at_capture, tilt_at_capture, t_now) -> ((pan_goal, tilt_goal) or None, locked)"""
 
-    def __init__(self, cam, tracker="AUTO", lead=0.03, q=2e6, give_up=30, gate=15.0, name=None):
+    def __init__(self, cam, tracker="AUTO", lead=0.03, q=2e6, give_up=30, gate=8.0, name=None):
         self.cam, self.kind, self.lead, self.q, self.give_up, self.gate = cam, tracker.upper(), lead, q, give_up, gate
         self.name = name or f"predictive ({self.kind} + Kalman, lead {lead * 1000:.0f} ms)"
         self.kp = self.kt = None; self.box = None; self.misses = 0
@@ -146,6 +147,10 @@ class Predictive:
             self._learn(self._small(frame), tuple(int(round(v * self.k)) for v in box))
         else:
             self.trk = make_cv_tracker(self.kind); self.trk.init(bgr(frame), tuple(int(v) for v in box))
+
+    def size_px(self):
+        """Smoothed target size in full-picture pixels (steadier than one frame's box)."""
+        return self.size / getattr(self, "k", 1.0)
 
     def predicted(self, t):
         return self.kp.at(t), self.kt.at(t)
@@ -253,15 +258,18 @@ class Predictive:
             cx, cy = b[0] + b[2] / 2, b[1] + b[3] / 2
             zp, zt = pixel_bearing(self.cam, pan_meas, tilt_meas, cx, cy)
             zp = self.kp.x[0] + ((zp - self.kp.x[0] + 180) % 360 - 180)
-            if math.hypot(zp - self.kp.x[0], zt - self.kt.x[0]) > self.gate:
+            sz = max(b_small[2], b_small[3]) if b_small is not None else max(b[2], b[3])
+            if self.size > 4 and not (self.size / 2.2 <= sz <= self.size * 2.2):
+                ok = False                                         # a speck or a big blob: not the same target
+            elif math.hypot(zp - self.kp.x[0], zt - self.kt.x[0]) > self.gate:
                 ok = False                                         # a jump no drone can make: tracker slipped
         if ok:
             self.misses = 0; self.box = b
             self.kp.correct(zp); self.kt.correct(zt)
-            sz = max(b_small[2], b_small[3]) if b_small is not None else max(b[2], b[3])
             self.size = 0.85 * self.size + 0.15 * sz
         else:
             self.misses += 1; self.box = None
+            self.kp.x[1] *= COAST_DAMP; self.kt.x[1] *= COAST_DAMP   # don't fling the turret along a guess
             if self.misses > self.give_up: return None, False         # lost: stop coasting
         goal = self.predicted(t_now + self.lead)
         locked = ok and math.hypot(goal[0] - pan_meas, goal[1] - tilt_meas) < 2.0

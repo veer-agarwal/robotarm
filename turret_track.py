@@ -270,8 +270,8 @@ def main():
                 flight = (rng_est / a.dart_speed) if (rng_est and a.dart_speed > 0) else 0.0
                 aim.lead = a.lead + flight                          # darts: also lead by their flight time
                 goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
-                if goal is not None and max(abs(aim.kp.x[1]), abs(aim.kt.x[1])) > 400:
-                    goal = None                                      # runaway (target "moving" > 400 deg/s): let go
+                if goal is not None and max(abs(aim.kp.x[1]), abs(aim.kt.x[1])) > 300:
+                    goal = None                                      # runaway (target "moving" > 300 deg/s): let go
                     print("predict: target estimate ran away, dropped it - press C to pick again")
                 if aim is not None and aim.box is not None:          # range from how big the drone looks
                     half_px = max(aim.box[2], aim.box[3]) / 2
@@ -333,7 +333,8 @@ def main():
 
             half = None                                     # target's half-width in degrees, from its box
             if hud["box"] is not None and lens is not None:
-                half = math.degrees(math.atan(max(hud["box"][2], hud["box"][3]) / 2 / lens.f))
+                size = aim.size_px() if (mode == "predict" and aim is not None) else max(hud["box"][2], hud["box"][3])
+                half = math.degrees(math.atan(size / 2 / lens.f))
             state = fc.update(tracking, hud["err"], steady, armed, half)
             if laser: laser.set(state == "FIRE", blaster_fire=(state == "FIRE" and armed))
 
