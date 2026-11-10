@@ -11,8 +11,20 @@ import os
 os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")   # MSMF opens in ~1 s instead of ~8 s
 import cv2
 
-ORDER = ["DSHOW", "MSMF", "ANY"] if os.name == "nt" else ["ANY"]
+# Media Foundation first: with the size + fps given when it opens, it's the only way the Arducam OV9281 gets its
+# compressed 120 fps stream on this PC (DirectShow only offers raw YUY2, ~20 fps at 1280x720).
+ORDER = ["MSMF", "DSHOW", "ANY"] if os.name == "nt" else ["ANY"]
 _last_good = None
+
+
+def set_exposure(cap, value):
+    """Fixed exposure (log2 seconds: -8 = 1/256 s). Returns True if the camera accepted it."""
+    if value is None: return False
+    try:
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+        return bool(cap.set(cv2.CAP_PROP_EXPOSURE, value))
+    except cv2.error:
+        return False
 
 
 def fourcc(cap):

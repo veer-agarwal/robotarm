@@ -78,10 +78,9 @@ def open_camera(idx, w, h, fps, exposure):
     cap, backend = open_capture(idx, w, h, fps)
     if cap is None:
         sys.exit(f"Camera {idx} didn't open. Try --cam 0 (or 1, 2), and close other apps using it (e.g. the Camera app).")
-    if backend == "DSHOW":                        # MSMF uses different exposure units; leave it on auto there
-        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)     # manual (DirectShow convention)
-        cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+    from camopen import set_exposure
+    if not set_exposure(cap, exposure):
+        print(f"(camera ignored the fixed exposure {exposure}; it stays on auto)")
     print(f"camera {idx}: {int(cap.get(3))}x{int(cap.get(4))} @ {cap.get(5):.0f} fps requested, exposure {exposure}")
     return cap
 

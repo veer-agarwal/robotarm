@@ -27,9 +27,10 @@ def open_cam(idx, w, h, fps, mjpg=True):
     cap, backend = open_capture(idx, w, h, fps, mjpg, quiet=True)
     if cap is None: return None
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    if EXPOSURE is not None and backend == "DSHOW":
+    if EXPOSURE is not None:
         # fixed short exposure: on auto, a dim room makes the camera slow its frame rate down (and add delay)
-        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25); cap.set(cv2.CAP_PROP_EXPOSURE, EXPOSURE)
+        from camopen import set_exposure
+        if not set_exposure(cap, EXPOSURE): print(f"(the camera ignored --exposure {EXPOSURE} on {backend})")
     return cap
 
 
