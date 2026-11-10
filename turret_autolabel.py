@@ -10,7 +10,8 @@ For each frame (every 3rd of a clip) the detector looks for the drone:
 With --fix, a frame is shown only when the model and the existing label disagree.
 
 Keys on a shown frame (red = model + score, green = existing label):
-  1 / Enter   the red box is right          2   keep the green (existing) label
+  1 / Enter   the red box is right (the higher score, marked 1)   3   the other red box (marked 3)
+  2           keep the green (existing) label
   N           no drone in this frame        D   draw the box yourself (drag, Enter)
   S           skip (don't use this frame)   B   back one frame      Q   stop (everything so far is saved)
 """
@@ -121,14 +122,19 @@ def main():
         for b, c in dets:
             x, y, w, h = map(int, b); cv2.rectangle(v, (x, y), (x + w, y + h), (0, 0, 255), 2)
             cv2.putText(v, f"{c:.2f}", (x, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        if len(dets) > 1:                                # number the top two so 1 / 3 are clear
+            for j, (b, c) in enumerate(dets[:2]):
+                cv2.putText(v, "1" if j == 0 else "3", (int(b[0] + b[2]) + 4, int(b[1] + b[3])),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
         if old:
             x, y, w, h = map(int, old); cv2.rectangle(v, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.putText(v, f"{k_i + 1}/{len(queue)}  1/Enter red  2 green  N none  D draw  S skip  B back  Q quit",
+        cv2.putText(v, f"{k_i + 1}/{len(queue)}  1/Enter red  3 2nd red  2 green  N none  D draw  S skip  B back  Q quit",
                     (12, H - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.imshow(win, v)
         k = cv2.waitKey(0) & 0xFF
         box = None
         if k in (ord("1"), 13) and dets: box = dets[0][0]
+        elif k == ord("3") and len(dets) > 1: box = dets[1][0]
         elif k == ord("2") and old is not None: box = old
         elif k == ord("n"): box = ()
         elif k == ord("d"):
