@@ -19,11 +19,18 @@ MODES = [(1280, 800, 120), (1280, 720, 120), (640, 400, 120), (640, 480, 120), (
          (1280, 720, 60), (640, 480, 60)]
 
 
+EXPOSURE = None                          # set from --exposure in main()
+
+
 def open_cam(idx, w, h, fps, mjpg=True):
     from camopen import open_capture
-    cap, _ = open_capture(idx, w, h, fps, mjpg, quiet=True)
+    cap, backend = open_capture(idx, w, h, fps, mjpg, quiet=True)
     if cap is None: return None
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    if EXPOSURE is not None and backend == "DSHOW":
+        # fixed short exposure: on auto, a dim room makes the camera slow its frame rate down (and add delay)
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25); cap.set(cv2.CAP_PROP_EXPOSURE, EXPOSURE)
+    cap.backend = backend
     return cap
 
 
@@ -76,7 +83,7 @@ def view(idx, w, h, fps):
         ok, f = cap.read()
         if not ok: break
         t = time.perf_counter(); est = 0.9 * est + 0.1 / max(1e-4, t - t_prev); t_prev = t
-        cv2.putText(f, f"{f.shape[1]}x{f.shape[0]}  {est:5.1f} fps   Q quit", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(f, f"{f.shape[1]}x{f.shape[0]}  {est:5.1f} fps  {getattr(cap, 'backend', '')}   Q quit", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.imshow("camera", f)
         if cv2.waitKey(1) & 0xFF in (ord("q"), 27): break
     cap.release(); cv2.destroyAllWindows()
@@ -151,6 +158,9 @@ def laser_latency(idx, w, h, fps, port, shots=20):
     r = 12
     roi = lambda g: float(g[max(0, py - r):py + r, max(0, px - r):px + r].mean())
     lo, hi = roi(off), roi(on); mid = (lo + hi) / 2
+    n0, t0f = 0, time.perf_counter()
+    while time.perf_counter() - t0f < 1.0: cap.read(); n0 += 1
+    print(f"backend {getattr(cap, 'backend', '?')}, camera running at {n0:.0f} fps during the test")
     print(f"laser dot at pixel ({px}, {py}); timing {shots} on/off switches ...")
     res = []
     settle(0.6)
@@ -176,7 +186,9 @@ def main():
     ap.add_argument("--fps", type=int, default=120)
     ap.add_argument("--view", action="store_true"); ap.add_argument("--latency", action="store_true")
     ap.add_argument("--laser-latency", action="store_true"); ap.add_argument("--nano", default="COM11")
+    ap.add_argument("--exposure", type=float, help="fixed exposure, DirectShow log2 seconds (-8 = 1/256 s, -9 = 1/512 s); default auto")
     a = ap.parse_args()
+    global EXPOSURE; EXPOSURE = a.exposure
     if a.view: view(a.cam, a.width, a.height, a.fps)
     elif a.latency: latency(a.cam, a.width, a.height, a.fps)
     elif a.laser_latency: laser_latency(a.cam, a.width, a.height, a.fps, a.nano)
