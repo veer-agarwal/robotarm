@@ -2,8 +2,8 @@
 
     python turret_train.py              # yolo11n, 80 epochs, 640 px
     python turret_train.py --epochs 120 --model yolo11s.pt
-    python turret_train.py --review     # no training: run models/tello.pt on the val clip, save runs/review.jpg
-                                        # (green = your label, red = what the model found, only frames it got wrong)
+    python turret_train.py --review     # no training: run models/tello.pt on the val clip, save runs/review_<name>.jpg
+                                        # e.g. --review --weights runs\\detect\\runs\\tello\\weights\\best.pt runs\\detect\\runs\\tello\\weights\\last.pt
 
 Uses the NVIDIA GPU if PyTorch can see one (minutes), else the CPU (an hour or more).
 Copies the best weights to models/tello.pt (+ models/tello.onnx).
@@ -22,7 +22,7 @@ def main():
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--review", action="store_true", help="skip training; check models/tello.pt on the val images")
-    ap.add_argument("--weights", default=os.path.join("models", "tello.pt"), help="for --review")
+    ap.add_argument("--weights", nargs="+", default=[os.path.join("models", "tello.pt")], help="for --review (one or more)")
     a = ap.parse_args()
 
     try:
@@ -34,7 +34,10 @@ def main():
         sys.exit(f"No {a.data}. Run turret_label.py on your clips first.")
     gpu = torch.cuda.is_available()
     if a.review:
-        return review(YOLO(a.weights), os.path.dirname(a.data), 0 if gpu else "cpu", a.imgsz)
+        for w in a.weights:
+            review(YOLO(w), os.path.dirname(a.data), 0 if gpu else "cpu", a.imgsz,
+                   "review_" + os.path.splitext(os.path.basename(w))[0])
+        return
     print("training on", torch.cuda.get_device_name(0) if gpu else "CPU (slow; an NVIDIA GPU + CUDA PyTorch is ~20x faster)")
 
     model = YOLO(a.model)
@@ -52,7 +55,7 @@ def main():
     onnx = m.export(format="onnx", imgsz=a.imgsz, dynamic=False, simplify=True)
     shutil.copy(onnx, os.path.join("models", "tello.onnx"))
     print("saved models/tello.pt and models/tello.onnx")
-    review(m, os.path.dirname(a.data), 0 if gpu else "cpu", a.imgsz)
+    review(m, os.path.dirname(a.data), 0 if gpu else "cpu", a.imgsz, "review_best")
 
 
 def iou(a, b):
@@ -61,53 +64,65 @@ def iou(a, b):
     return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i + 1e-9)
 
 
-def review(model, root, device, imgsz, conf=0.35):
-    """Per-frame check on the val clip: hit / miss / false alarm, misses by drone size, and a sheet of the bad frames."""
+def review(model, root, device, imgsz, tag="review"):
+    """Per-frame check on the val clip. Scores every detection once, then reports hits / misses / false alarms at several
+    confidence cutoffs (an early-epoch model finds the drone but with low scores, so one fixed cutoff can hide it),
+    and saves runs/<tag>.jpg with the frames it gets wrong at the best cutoff."""
     import glob
     import cv2
     import numpy as np
     imgs = sorted(glob.glob(os.path.join(root, "images", "val", "*.jpg")))
-    hit = miss = fa = loose = 0; bad = []; sizes = {"hit": [], "miss": []}
+    rows = []                                            # (path, gt boxes, pred boxes, pred scores)
     for f in imgs:
         im = cv2.imread(f); H, W = im.shape[:2]
         lab = f.replace(os.sep + "images" + os.sep, os.sep + "labels" + os.sep)[:-4] + ".txt"
         gt = []
-        for l in open(lab).read().split("\n") if os.path.exists(lab) else []:
+        for l in (open(lab).read().split("\n") if os.path.exists(lab) else []):
             if l.strip():
                 _, cx, cy, w, h = map(float, l.split())
                 gt.append([(cx - w / 2) * W, (cy - h / 2) * H, (cx + w / 2) * W, (cy + h / 2) * H])
-        r = model.predict(im, imgsz=imgsz, conf=conf, device=device, verbose=False)[0]
-        pr = r.boxes.xyxy.cpu().numpy().tolist(); pc = r.boxes.conf.cpu().numpy().tolist()
-        why = []
-        for g in gt:
-            best = max([iou(g, p) for p in pr], default=0)
-            if best >= 0.3:
-                hit += 1; sizes["hit"].append(g[2] - g[0])
-                if best < 0.5: loose += 1
-            else:
-                miss += 1; sizes["miss"].append(g[2] - g[0]); why.append("MISS")
-        for p in pr:
-            if max([iou(g, p) for g in gt], default=0) < 0.3: fa += 1; why.append("FALSE")
-        if why:
-            v = im.copy()
-            for g in gt: cv2.rectangle(v, (int(g[0]), int(g[1])), (int(g[2]), int(g[3])), (0, 255, 0), 3)
-            for p, c in zip(pr, pc):
-                cv2.rectangle(v, (int(p[0]), int(p[1])), (int(p[2]), int(p[3])), (0, 0, 255), 3)
-                cv2.putText(v, f"{c:.2f}", (int(p[0]), int(p[1]) - 6), 0, 1.0, (0, 0, 255), 2)
-            cv2.putText(v, os.path.basename(f)[5:-4] + "  " + " ".join(sorted(set(why))), (10, 40), 0, 1.1, (0, 0, 255), 3)
-            bad.append(cv2.resize(v, (427, 240)))
-    n = hit + miss
-    print(f"\nval clip, conf {conf}:  found {hit}/{n} drones ({100 * hit / max(n, 1):.0f}%), missed {miss}, "
-          f"false alarms {fa} in {len(imgs)} frames, loose boxes {loose}")
-    for k in ("hit", "miss"):
-        if sizes[k]: print(f"  {k:4s} drone width px: median {np.median(sizes[k]):.0f}  min {min(sizes[k]):.0f}  max {max(sizes[k]):.0f}")
-    if bad:
-        bad = bad[:60]
-        while len(bad) % 5: bad.append(np.zeros_like(bad[0]))
-        sheet = np.vstack([np.hstack(bad[i:i + 5]) for i in range(0, len(bad), 5)])
-        cv2.imwrite(os.path.join("runs", "review.jpg"), sheet)
-        print("frames it got wrong: runs/review.jpg  (green = your label, red = model)")
+        r = model.predict(im, imgsz=imgsz, conf=0.01, device=device, verbose=False)[0]
+        rows.append((f, gt, r.boxes.xyxy.cpu().numpy().tolist(), r.boxes.conf.cpu().numpy().tolist()))
 
+    def score(conf):
+        hit = miss = fa = 0; bad = []
+        for f, gt, pr, pc in rows:
+            p = [b for b, c in zip(pr, pc) if c >= conf]; why = []
+            for g in gt:
+                if max([iou(g, q) for q in p], default=0) >= 0.3: hit += 1
+                else: miss += 1; why.append("MISS")
+            for q in p:
+                if max([iou(g, q) for g in gt], default=0) < 0.3: fa += 1; why.append("FALSE")
+            if why: bad.append((f, gt, pr, pc, why))
+        return hit, miss, fa, bad
+
+    n = sum(len(g) for _, g, _, _ in rows)
+    top = [max([c for b, c in zip(pr, pc) if max([iou(g, b) for g in gt], default=0) >= 0.3], default=0)
+           for _, gt, pr, pc in rows if gt]
+    print(f"\n{tag}: {len(imgs)} val frames, {n} drones. Score the model gives the real drone: "
+          f"median {np.median(top):.2f}, 10% of frames below {np.percentile(top, 10):.2f}")
+    best = None
+    for conf in (0.05, 0.1, 0.2, 0.35, 0.5):
+        hit, miss, fa, bad = score(conf)
+        f1 = 2 * hit / max(2 * hit + miss + fa, 1)
+        print(f"  cutoff {conf:.2f}:  found {hit}/{n} ({100 * hit / max(n, 1):.0f}%)  missed {miss}  false alarms {fa}  F1 {f1:.2f}")
+        if best is None or f1 > best[0]: best = (f1, conf, bad)
+    f1, conf, bad = best
+    print(f"  best cutoff {conf:.2f}")
+    tiles = []
+    for f, gt, pr, pc, why in bad[:60]:
+        v = cv2.imread(f)
+        for g in gt: cv2.rectangle(v, (int(g[0]), int(g[1])), (int(g[2]), int(g[3])), (0, 255, 0), 3)
+        for q, c in zip(pr, pc):
+            if c < conf: continue
+            cv2.rectangle(v, (int(q[0]), int(q[1])), (int(q[2]), int(q[3])), (0, 0, 255), 3)
+            cv2.putText(v, f"{c:.2f}", (int(q[0]), int(q[1]) - 6), 0, 1.0, (0, 0, 255), 2)
+        cv2.putText(v, os.path.basename(f)[5:-4] + "  " + " ".join(sorted(set(why))), (10, 40), 0, 1.1, (0, 0, 255), 3)
+        tiles.append(cv2.resize(v, (427, 240)))
+    if tiles:
+        while len(tiles) % 5: tiles.append(np.zeros_like(tiles[0]))
+        cv2.imwrite(os.path.join("runs", tag + ".jpg"), np.vstack([np.hstack(tiles[i:i + 5]) for i in range(0, len(tiles), 5)]))
+        print(f"  frames it gets wrong at {conf:.2f}: runs/{tag}.jpg  (green = your label, red = model + score)")
 
 if __name__ == "__main__":
     main()
