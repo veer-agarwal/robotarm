@@ -19,20 +19,25 @@ MODES = [(1280, 800, 120), (1280, 720, 120), (640, 400, 120), (640, 480, 120), (
 
 def open_cam(idx, w, h, fps, mjpg=True):
     from camopen import open_capture
-    cap, _ = open_capture(idx, quiet=True)
+    cap, _ = open_capture(idx, w, h, fps, mjpg, quiet=True)
     if cap is None: return None
-    if mjpg: cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h); cap.set(cv2.CAP_PROP_FPS, fps)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return cap
 
 
 def measure(cap, n=120):
-    for _ in range(10): cap.read()                       # let it settle
+    f = None
+    try:
+        for _ in range(10): cap.read()                   # let it settle
+    except cv2.error:
+        return 0.0, None
     t0 = time.perf_counter(); got = 0
     for _ in range(n):
-        ok, f = cap.read()
-        if ok: got += 1
+        try:
+            ok, fr = cap.read()
+        except cv2.error:
+            ok = False
+        if ok: got += 1; f = fr
     dt = time.perf_counter() - t0
     return got / dt if dt > 0 else 0.0, f
 
@@ -42,7 +47,8 @@ def probe(idx):
     best = None
     for w, h, fps in MODES:
         cap = open_cam(idx, w, h, fps)
-        if cap is None: sys.exit(f"camera {idx} didn't open. Try --cam 0/1/2 and close other apps using it.")
+        if cap is None:
+            print(f"  asked {w}x{h}@{fps:<3}  could not open in this mode"); continue
         rw, rh = int(cap.get(3)), int(cap.get(4))
         real, f = measure(cap)
         mono = f is not None and f.ndim == 3 and np.allclose(f[..., 0], f[..., 1], atol=2)

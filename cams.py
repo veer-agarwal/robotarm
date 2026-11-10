@@ -19,12 +19,9 @@ def main() -> None:
     caps = {}
     for i in wanted:
         from camopen import open_capture   # DirectShow first, then Media Foundation if DirectShow can't open it
-        cap, _ = open_capture(i, quiet=True)
+        cap, _ = open_capture(i, W, H, FPS, mjpg=False, quiet=True)
         if cap is None:
             continue
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
-        cap.set(cv2.CAP_PROP_FPS, FPS)
         ok, _ = cap.read()
         if ok:
             caps[i] = cap

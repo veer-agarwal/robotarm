@@ -75,14 +75,13 @@ def make_tracker():
 
 def open_camera(idx, w, h, fps, exposure):
     from camopen import open_capture
-    cap, backend = open_capture(idx)
+    cap, backend = open_capture(idx, w, h, fps)
     if cap is None:
-        sys.exit(f"Camera {idx} didn't open. Try --cam 1 (or 2), and close other apps using it.")
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h); cap.set(cv2.CAP_PROP_FPS, fps)
-    cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)     # manual (DirectShow convention)
-    cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
+        sys.exit(f"Camera {idx} didn't open. Try --cam 0 (or 1, 2), and close other apps using it (e.g. the Camera app).")
+    if backend == "DSHOW":                        # MSMF uses different exposure units; leave it on auto there
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)     # manual (DirectShow convention)
+        cap.set(cv2.CAP_PROP_EXPOSURE, exposure)
     print(f"camera {idx}: {int(cap.get(3))}x{int(cap.get(4))} @ {cap.get(5):.0f} fps requested, exposure {exposure}")
     return cap
 
