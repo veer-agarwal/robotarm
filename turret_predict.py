@@ -41,6 +41,17 @@ class Lens:
             self.f = w / 2 / math.tan(math.radians(hfov / 2))
 
 
+class Scaled:
+    """The same lens, for a picture resized by k (big targets are tracked on a smaller copy of the frame)."""
+
+    def __init__(self, cam, k):
+        self.w, self.h = int(round(cam.w * k)), int(round(cam.h * k))
+        self.f, self.cx, self.cy = cam.f * k, cam.cx * k, cam.cy * k
+
+
+TRACK_PX = 40          # big targets get tracked on a picture shrunk so they're about this many pixels across
+
+
 def pixel_bearing(cam, pan, tilt, px, py):
     """World (pan, tilt) of the ray through pixel (px, py) when the turret points at (pan, tilt)."""
     return bearing(rot(pan, tilt) @ np.array([cam.f, -(px - cam.cx), -(py - cam.cy)]))
@@ -128,7 +139,11 @@ class Predictive:
             self.name = self.name.replace("AUTO", f"auto: {self.kind.lower()}")
         self.need, self.need_anchor, self.blend = 0.55, 0.4, 0.05
         if self.kind in ("BLOB", "TEMPLATE"):
-            self._learn(gray(frame), tuple(int(v) for v in box))
+            # matching a 380-px template over a 1000-px window takes ~100 ms; shrink the picture for big targets
+            self.k = min(1.0, TRACK_PX / max(1, max(box[2], box[3])))
+            self.full_cam, self.small_cam = self.cam, Scaled(self.cam, self.k)
+            self.size = self.size * self.k
+            self._learn(self._small(frame), tuple(int(round(v * self.k)) for v in box))
         else:
             self.trk = make_cv_tracker(self.kind); self.trk.init(bgr(frame), tuple(int(v) for v in box))
 
@@ -209,12 +224,26 @@ class Predictive:
         return self._match(win, x0, y0)                                # fall back to what the target looks like
 
     # -- main step
+    def _small(self, frame):
+        g = gray(frame)
+        return g if self.k >= 1.0 else cv2.resize(g, (self.small_cam.w, self.small_cam.h), interpolation=cv2.INTER_AREA)
+
+    def _run_small(self, fn, frame, pan, tilt, t_cap):
+        """Run the blob/template finder on the shrunk picture; return the box in full-size pixels."""
+        self.cam = self.small_cam
+        try:
+            b = fn(self._small(frame), pan, tilt, t_cap)
+        finally:
+            self.cam = self.full_cam
+        if b is None: return None, None
+        return tuple(v / self.k for v in b), b
+
     def update(self, frame, t_cap, pan_meas, tilt_meas, t_now):
         self.kp.predict_to(t_cap); self.kt.predict_to(t_cap)
-        if self.kind == "BLOB":
-            b = self._blob(gray(frame), pan_meas, tilt_meas, t_cap); ok = b is not None
-        elif self.kind == "TEMPLATE":
-            b = self._template(gray(frame), pan_meas, tilt_meas, t_cap); ok = b is not None
+        b_small = None
+        if self.kind in ("BLOB", "TEMPLATE"):
+            fn = self._blob if self.kind == "BLOB" else self._template
+            b, b_small = self._run_small(fn, frame, pan_meas, tilt_meas, t_cap); ok = b is not None
         else:
             ok, b = self.trk.update(bgr(frame))
         if ok:
@@ -226,7 +255,8 @@ class Predictive:
         if ok:
             self.misses = 0; self.box = b
             self.kp.correct(zp); self.kt.correct(zt)
-            self.size = 0.85 * self.size + 0.15 * max(b[2], b[3])
+            sz = max(b_small[2], b_small[3]) if b_small is not None else max(b[2], b[3])
+            self.size = 0.85 * self.size + 0.15 * sz
         else:
             self.misses += 1; self.box = None
             if self.misses > self.give_up: return None, False         # lost: stop coasting
