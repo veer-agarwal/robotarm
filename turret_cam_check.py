@@ -60,7 +60,9 @@ def probe(idx):
         rw, rh = int(cap.get(3)), int(cap.get(4))
         real, f = measure(cap)
         mono = f is not None and f.ndim == 3 and np.allclose(f[..., 0], f[..., 1], atol=2)
-        print(f"  asked {w}x{h}@{fps:<3}  got {rw}x{rh}  measured {real:5.1f} fps{'  (mono)' if mono else ''}")
+        from camopen import fourcc
+        print(f"  asked {w}x{h}@{fps:<3}  got {rw}x{rh} {fourcc(cap)}  measured {real:5.1f} fps{'  (mono)' if mono else ''}"
+              f"  [{cap.getBackendName()}]")
         if (rw, rh) == (w, h) and (best is None or real > best[2] * 1.05): best = (w, h, real)
         cap.release()
     if best:
@@ -159,7 +161,8 @@ def laser_latency(idx, w, h, fps, port, shots=20):
     lo, hi = roi(off), roi(on); mid = (lo + hi) / 2
     n0, t0f = 0, time.perf_counter()
     while time.perf_counter() - t0f < 1.0: cap.read(); n0 += 1
-    print(f"backend {cap.getBackendName()}, camera running at {n0:.0f} fps during the test")
+    from camopen import fourcc
+    print(f"backend {cap.getBackendName()}, format {fourcc(cap)}, camera running at {n0:.0f} fps during the test")
     print(f"laser dot at pixel ({px}, {py}); timing {shots} on/off switches ...")
     res = []
     settle(0.6)

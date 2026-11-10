@@ -15,6 +15,13 @@ ORDER = ["DSHOW", "MSMF", "ANY"] if os.name == "nt" else ["ANY"]
 _last_good = None
 
 
+def fourcc(cap):
+    """The pixel format the camera is actually sending, e.g. 'MJPG' or 'YUY2'."""
+    v = int(cap.get(cv2.CAP_PROP_FOURCC))
+    s = "".join(chr((v >> 8 * i) & 0xFF) for i in range(4))
+    return s if s.isprintable() and s.strip() else "?"
+
+
 def _works(cap, tries=10):
     """The first frames after a format change can fail for a moment: give it a few reads."""
     for _ in range(tries):
@@ -62,8 +69,11 @@ def _open_once(idx, w, h, fps, mjpg, prefer, quiet):
             if not cap.isOpened():
                 cap.release(); continue
             if name != "MSMF":
+                # DirectShow only keeps MJPG if it's set both before and after the size; without MJPG a USB 2
+                # camera falls back to raw YUY2 and 1280x720 tops out around 20 fps
                 if mjpg: cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 if w and h: cap.set(cv2.CAP_PROP_FRAME_WIDTH, w); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                if mjpg: cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
                 if fps: cap.set(cv2.CAP_PROP_FPS, fps)
             if _works(cap):
                 _last_good = name
