@@ -3,6 +3,8 @@
     python turret_cam_check.py --cam 1            which sizes / frame rates the camera really delivers
     python turret_cam_check.py --cam 1 --view     live picture with the measured fps (Q to quit)
     python turret_cam_check.py --cam 1 --latency  measures the camera delay to use as turret_track.py --latency
+    python turret_cam_check.py --cam 0 --laser-latency --nano COM11   same, timed with the turret's laser (better:
+                                                  no monitor delay in it). Point the turret at a wall, not at anyone.
 
 Latency test: a window flashes black/white. Point the camera at it (fill most of the picture, room lights dim is
 fine) and keep still. It times each flash from the moment it's drawn to the moment the camera sees it, 20 times.
@@ -127,15 +129,57 @@ def latency(idx, w, h, fps, flashes=20):
     print(f"use about: turret_track.py --latency {est / 1000:.3f}   (after taking ~8 ms off for a 60 Hz monitor)")
 
 
+def laser_latency(idx, w, h, fps, port, shots=20):
+    """Switch the laser on/off through the ESP32 and time how long until the camera sees the dot change.
+    Only the serial write (~1 ms) and the camera are in this number, so it's what --latency should be."""
+    import serial
+    cap = need(open_cam(idx, w, h, fps), idx)
+    s = serial.Serial(port, 115200, timeout=0); time.sleep(2.0)
+    gray = lambda: cv2.cvtColor(cap.read()[1], cv2.COLOR_BGR2GRAY).astype(np.int16)
+    def settle(sec):
+        t = time.perf_counter()
+        while time.perf_counter() - t < sec: cap.read()
+    s.write(b"0"); settle(0.6)
+    off = gray()
+    s.write(b"1"); settle(0.3)
+    on = gray(); s.write(b"0")
+    diff = cv2.GaussianBlur(np.abs(on - off).astype(np.uint8), (0, 0), 2)
+    _, peak, _, (px, py) = cv2.minMaxLoc(diff)
+    if peak < 25:
+        s.close(); sys.exit(f"can't see the laser dot (change {peak:.0f}). Is the laser armed/plugged in, and pointing "
+                            "at a wall inside the camera's view? Dim the room lights if it's bright.")
+    r = 12
+    roi = lambda g: float(g[max(0, py - r):py + r, max(0, px - r):px + r].mean())
+    lo, hi = roi(off), roi(on); mid = (lo + hi) / 2
+    print(f"laser dot at pixel ({px}, {py}); timing {shots} on/off switches ...")
+    res = []
+    settle(0.6)
+    for i in range(shots):
+        want_on = i % 2 == 0
+        t0 = time.perf_counter(); s.write(b"1" if want_on else b"0")
+        while time.perf_counter() - t0 < 0.45:            # the ESP32 turns the laser off by itself after 0.5 s
+            g = cv2.cvtColor(cap.read()[1], cv2.COLOR_BGR2GRAY).astype(np.int16)
+            if (roi(g) > mid) == want_on:
+                res.append(1000 * (time.perf_counter() - t0)); break
+        s.write(b"0"); settle(0.3 + 0.1 * np.random.rand())
+    s.write(b"0"); s.close(); cap.release()
+    if not res: sys.exit("no switches detected")
+    r_ = np.array(res)
+    print(f"camera delay over {len(r_)} switches: median {np.median(r_):.0f} ms (min {r_.min():.0f}, max {r_.max():.0f})")
+    print(f"use: turret_track.py --latency {np.median(r_) / 1000 - 0.004:.3f}   (half a frame taken off: the frame is exposed before it arrives)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cam", type=int, default=0)
     ap.add_argument("--width", type=int, default=640); ap.add_argument("--height", type=int, default=400)
     ap.add_argument("--fps", type=int, default=120)
     ap.add_argument("--view", action="store_true"); ap.add_argument("--latency", action="store_true")
+    ap.add_argument("--laser-latency", action="store_true"); ap.add_argument("--nano", default="COM11")
     a = ap.parse_args()
     if a.view: view(a.cam, a.width, a.height, a.fps)
     elif a.latency: latency(a.cam, a.width, a.height, a.fps)
+    elif a.laser_latency: laser_latency(a.cam, a.width, a.height, a.fps, a.nano)
     else: probe(a.cam)
 
 
