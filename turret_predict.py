@@ -210,6 +210,11 @@ class Predictive:
         if blend < 1.0 and self.tmpl is not None and self.tmpl[0].shape == t.shape:
             t = (1 - blend) * self.tmpl[0] + blend * t                  # drift slowly toward the new look
         self.tmpl = (t, m)
+        inner = g[y:y + h, x:x + w].astype(np.float32)
+        if inner.shape[0] >= 4 and inner.shape[1] >= 4:
+            if blend < 1.0 and getattr(self, "inner", None) is not None and self.inner.shape == inner.shape:
+                inner = (1 - blend) * self.inner + blend * inner
+            self.inner = inner
         px = g[max(0, y):y + h, max(0, x):x + w]
         if px.size:
             lv = float(np.percentile(px, 30))
@@ -272,7 +277,23 @@ class Predictive:
             box = (int(x + x0), int(y + y0), int(w), int(h))
             self._learn(g, box)
             return box
-        return self._match(win, x0, y0)                                # fall back to what the target looks like
+        # the dark patch merged with something dark behind it (bed, shelf): find the target by its own look instead,
+        # using only the target's pixels (no background) and preferring spots near where it should be
+        return self._match_inner(win, x0, y0, u, v)
+
+    def _match_inner(self, win, x0, y0, u, v, need=0.55):
+        t = getattr(self, "inner", None)
+        if t is None or t.shape[0] >= win.shape[0] or t.shape[1] >= win.shape[1]: return None
+        if float(t.std()) < 2.0: return None                             # featureless: a match would mean nothing
+        r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
+        hh, ww = r.shape
+        ys, xs = np.mgrid[0:hh, 0:ww]
+        cx, cy = u - x0 - t.shape[1] / 2, v - y0 - t.shape[0] / 2         # where the top-left corner is expected
+        reach = max(8.0, 0.5 * max(win.shape))
+        r = r - 0.25 * np.hypot(xs - cx, ys - cy) / reach                  # a far look-alike has to be clearly better
+        _, score, _, (bx, by) = cv2.minMaxLoc(r)
+        if score < need: return None
+        return (bx + x0, by + y0, t.shape[1], t.shape[0])
 
     # -- main step
     def _small(self, frame):
