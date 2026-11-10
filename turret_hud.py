@@ -148,6 +148,7 @@ def draw(frame, st, out_w=1280):
         info = []
         if st.get("err") is not None: info.append(f"ERR {st['err']:.1f}")
         if st.get("rate") is not None: info.append(f"{st['rate']:.0f} DEG/S")
+        if st.get("range") is not None: info.append(f"{st['range']:.1f} M")
         for i, s in enumerate(info):
             _text(img, s, (mx + r + 10 * u, my - r / 2 + i * 18 * u), ts, col)
     lead = st.get("lead")

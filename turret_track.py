@@ -124,6 +124,10 @@ class Servos:
         self.bus.close()
 
 
+SPINUP, REV_HOLD = 0.3, 0.6          # blaster: flywheel spin-up before the pusher runs; keep spinning after a burst
+TARGET_SIZE = 0.20                   # Tello with prop guards, metres (used to estimate range from the box size)
+
+
 class Laser:
     """Nano running turret_laser.ino: '1' = on, '0' = off, turns itself off if nothing arrives for 0.5 s."""
     def __init__(self, port):
@@ -136,12 +140,28 @@ class Laser:
         time.sleep(2.0)                  # Nano resets when the port opens
         self.last = 0.0
 
-    def set(self, on):
-        if time.time() - self.last > 0.1:
-            self.s.write(b"1" if on else b"0"); self.last = time.time()
+        self.blaster = False; self.rev = False; self.fire = False; self.rev_since = 0.0; self.fire_until = 0.0
+
+    def set(self, on, blaster_fire=False):
+        """Called every frame. on = laser. blaster_fire = FIRE state while armed (only used with --blaster):
+        flywheels rev, the pusher runs once they've spun up (the ESP32 enforces that too), and the flywheels keep
+        spinning for REV_HOLD s after the last shot so the next burst is instant."""
+        now = time.time()
+        if self.blaster:
+            if blaster_fire:
+                if not self.rev: self.rev, self.rev_since = True, now
+                self.fire_until = now + REV_HOLD
+                self.fire = now - self.rev_since >= SPINUP
+            else:
+                self.fire = False
+                if self.rev and now > self.fire_until: self.rev = False
+        if now - self.last > 0.1:
+            msg = b"1" if on else b"0"
+            if self.blaster: msg += (b"R" if self.rev else b"r") + (b"F" if self.fire else b"f")
+            self.s.write(msg); self.last = now
 
     def close(self):
-        try: self.s.write(b"0"); self.s.close()
+        try: self.s.write(b"0rf"); self.s.close()
         except Exception: pass
 
 
@@ -174,6 +194,13 @@ def main():
     ap.add_argument("--q", type=float, default=2e6, help="predict mode: how fast the target can change direction")
     ap.add_argument("--latency", type=float, default=0.025, help="predict mode: camera delay, seconds (capture -> frame here)")
     ap.add_argument("--acc", type=int, help="servo ACC register 0-254 (default 60; 254 in predict mode)")
+    ap.add_argument("--muzzle-below", type=float, default=0.033,
+                    help="predict mode: how far the laser/muzzle sits BELOW the camera lens, metres (laser plate: 0.033)")
+    ap.add_argument("--muzzle-right", type=float, default=0.0, help="...and to the RIGHT of it, metres")
+    ap.add_argument("--dart-speed", type=float, default=0.0,
+                    help="m/s; 0 = laser (no drop). With darts (~30) it aims up for drop and leads for flight time")
+    ap.add_argument("--mask", help="ignore part of the picture, fractions x0,y0,x1,y1 (e.g. the laser block: 0.4,0.85,0.6,1)")
+    ap.add_argument("--blaster", action="store_true", help="the --nano ESP32 also drives the rev/fire relays")
     a = ap.parse_args()
     if a.mode == "predict" and not a.port:
         sys.exit("predict mode reads the servo angles, so it needs --port (e.g. --port COM9).")
@@ -184,6 +211,11 @@ def main():
     cap = open_camera(a.cam, a.width, a.height, a.fps, a.exposure)
     servos = Servos(a.port, a.acc if a.acc is not None else (254 if a.mode == "predict" else 60)) if a.port else None
     laser = Laser(a.nano) if a.nano else None
+    if a.blaster:
+        if not laser: sys.exit("--blaster needs --nano (the ESP32's port)")
+        laser.blaster = True
+    mask = [float(v) for v in a.mask.split(",")] if a.mask else None
+    rng_est = None                                   # filtered range to the target, metres
     os.makedirs("recordings", exist_ok=True)
 
     tracker, tname, box = None, "", None
@@ -205,6 +237,10 @@ def main():
             if not ok:
                 print("camera stopped delivering frames"); break
             t_frame = time.perf_counter()
+            if mask is not None:                     # blank out a part of the picture the tracker should ignore
+                Hm, Wm = frame.shape[:2]
+                x0, y0, x1, y1 = int(mask[0] * Wm), int(mask[1] * Hm), int(mask[2] * Wm), int(mask[3] * Hm)
+                frame[y0:y1, x0:x1] = np.median(frame, axis=(0, 1)).astype(frame.dtype)
             raw = frame.copy()                       # clean copy: the target is picked from this, not the overlay
             H, W = frame.shape[:2]
             vfov = a.hfov * H / W
@@ -219,11 +255,26 @@ def main():
             now = time.time(); fps_est = 0.9 * fps_est + 0.1 / max(1e-3, now - t_prev); t_prev = now
 
             locked = False
-            hud = dict(box=None, lead=None, err=None, rate=None); tracking = steady = found_now = False
+            hud = dict(box=None, lead=None, err=None, rate=None, range=None); tracking = steady = found_now = False
             if mode == "predict" and aim is not None and angle_hist:
                 t_cap = t_frame - a.latency
                 pm, tm = angle_at(angle_hist, t_cap)               # where the turret pointed when the frame was taken
+                flight = (rng_est / a.dart_speed) if (rng_est and a.dart_speed > 0) else 0.0
+                aim.lead = a.lead + flight                          # darts: also lead by their flight time
                 goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
+                if aim is not None and aim.box is not None:          # range from how big the drone looks
+                    half_px = max(aim.box[2], aim.box[3]) / 2
+                    if half_px > 1:
+                        r_now = (TARGET_SIZE / 2) * lens.f / half_px
+                        rng_est = r_now if rng_est is None else 0.8 * rng_est + 0.2 * r_now
+                corr_p = corr_t = 0.0                               # muzzle isn't on the camera axis: aim it, not the lens
+                if rng_est:
+                    corr_t = math.degrees(math.atan2(a.muzzle_below, rng_est))
+                    corr_p = math.degrees(math.atan2(a.muzzle_right, rng_est))
+                    if a.dart_speed > 0:
+                        corr_t += math.degrees(math.atan2(0.5 * 9.81 * flight ** 2, rng_est))
+                if goal is not None:
+                    goal = (goal[0] + corr_p, goal[1] + corr_t)
                 if goal is None:
                     aim = None
                 else:
@@ -234,7 +285,9 @@ def main():
                     t_n = time.perf_counter()
                     _, p_now, t_now_ = angle_hist[-1]
                     bp, bt = aim.predicted(t_n)                     # where the target is now vs where the turret points
+                    bp, bt = bp + corr_p, bt + corr_t               # where the MUZZLE has to point
                     hud["err"] = math.hypot((bp - p_now) * math.cos(math.radians(bt)), bt - t_now_)
+                    hud["range"] = rng_est
                     hud["rate"] = math.hypot(aim.kp.x[1], aim.kt.x[1])
                     hud["box"] = aim.box
                     hud["lead"] = world_to_pixel(lens, pm, tm, *aim.predicted(t_n + a.lead))
@@ -265,7 +318,7 @@ def main():
             if hud["box"] is not None and lens is not None:
                 half = math.degrees(math.atan(max(hud["box"][2], hud["box"][3]) / 2 / lens.f))
             state = fc.update(tracking, hud["err"], steady, armed, half)
-            if laser: laser.set(state == "FIRE")
+            if laser: laser.set(state == "FIRE", blaster_fire=(state == "FIRE" and armed))
 
             # HUD (drawn on a scaled copy; recordings stay clean)
             hud.update(state=state, reason=fc.reason, hold_ms=fc.hold_ms, armed=armed, pan=pan, tilt=tilt, fps=fps_est,
@@ -281,7 +334,7 @@ def main():
                         from turret_predict import Predictive
                         if angle_hist:
                             _, pm, tm = angle_hist[-1]
-                            aim = Predictive(lens, a.tracker); aim.start(raw, r, pm, tm); tname = aim.name
+                            aim = Predictive(lens, a.tracker); aim.start(raw, r, pm, tm); tname = aim.name; rng_est = None
                     else:
                         tracker, tname = make_tracker(); tracker.init(raw, r); box = r
             elif k == ord("x"): tracker = None; box = None; aim = None
