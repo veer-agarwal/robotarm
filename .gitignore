@@ -6,3 +6,6 @@ recordings/
 datasets/
 turret_limits.json
 turret/out/
+models/
+runs/
+datasets/

@@ -10,7 +10,7 @@ Keys while it runs:
   Q      stop this clip (what was saved is kept)
 
 Output: datasets\\tello\\images\\{train,val}\\*.jpg + labels\\{train,val}\\*.txt (class 0 = drone) and
-datasets\\tello\\data.yaml, ready for:  yolo train model=yolo11n.pt data=datasets/tello/data.yaml epochs=80
+datasets\\tello\\data.yaml, ready for turret_train.py
 """
 import argparse, glob, os, sys
 import cv2
@@ -22,6 +22,8 @@ def main():
     ap.add_argument("clips", nargs="+")
     ap.add_argument("--out", default=os.path.join("datasets", "tello"))
     ap.add_argument("--every", type=int, default=3, help="save every Nth frame")
+    ap.add_argument("--val-every", type=int, default=5, help="every Nth clip goes to val as a whole (frames next to each "
+                    "other are near copies, so a per-frame split would make the val score look better than it is)")
     a = ap.parse_args()
     clips = [f for pat in a.clips for f in glob.glob(pat)]
     if not clips: sys.exit("No clips found.")
@@ -29,7 +31,8 @@ def main():
         os.makedirs(os.path.join(a.out, sub), exist_ok=True)
     saved = 0
     win = "label"; cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-    for clip in clips:
+    for ci, clip in enumerate(clips):
+        split = "val" if a.val_every and ci % a.val_every == a.val_every - 1 else "train"
         cap = cv2.VideoCapture(clip); name = os.path.splitext(os.path.basename(clip))[0]
         tracker, i, paused_absent = None, 0, False
         print(f"{clip}: draw a box around the drone, Enter. (No drone in this frame? press C in the box window to cancel, then N)")
@@ -52,7 +55,6 @@ def main():
                 else:
                     cv2.putText(view, "lost - SPACE to redraw", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             if i % a.every == 0 and (box is not None or paused_absent):
-                split = "val" if (saved % 10 == 9) else "train"
                 stem = f"{name}_{i:06d}"
                 cv2.imwrite(os.path.join(a.out, "images", split, stem + ".jpg"), frame)
                 with open(os.path.join(a.out, "labels", split, stem + ".txt"), "w") as f:
