@@ -205,6 +205,9 @@ def main():
     ap.add_argument("--muzzle-below", type=float, default=0.033,
                     help="predict mode: how far the laser/muzzle sits BELOW the camera lens, metres (laser plate: 0.033)")
     ap.add_argument("--muzzle-right", type=float, default=0.0, help="...and to the RIGHT of it, metres")
+    ap.add_argument("--laser-trim-down", type=float, default=0.0,
+                    help="deg the laser points below the camera centre (turret_cam_check.py --laser-cal measures it)")
+    ap.add_argument("--laser-trim-right", type=float, default=0.0, help="deg it points right of the camera centre")
     ap.add_argument("--dart-speed", type=float, default=0.0,
                     help="m/s; 0 = laser (no drop). With darts (~30) it aims up for drop and leads for flight time")
     ap.add_argument("--mask", help="ignore part of the picture, fractions x0,y0,x1,y1 (e.g. the laser block: 0.4,0.85,0.6,1)")
@@ -308,10 +311,11 @@ def main():
                     if half_px > 1:
                         r_now = (TARGET_SIZE / 2) * lens.f / half_px
                         rng_est = r_now if rng_est is None else 0.8 * rng_est + 0.2 * r_now
-                corr_p = corr_t = 0.0                               # muzzle isn't on the camera axis: aim it, not the lens
+                corr_p, corr_t = a.laser_trim_right, a.laser_trim_down   # laser not quite parallel to the camera
+                # (+ = aim left / up: a dot that lands right / low is fixed by aiming left / up)
                 if rng_est:
-                    corr_t = math.degrees(math.atan2(a.muzzle_below, rng_est))
-                    corr_p = math.degrees(math.atan2(a.muzzle_right, rng_est))
+                    corr_t += math.degrees(math.atan2(a.muzzle_below, rng_est))   # muzzle isn't on the camera axis
+                    corr_p += math.degrees(math.atan2(a.muzzle_right, rng_est))
                     if a.dart_speed > 0:
                         corr_t += math.degrees(math.atan2(0.5 * 9.81 * flight ** 2, rng_est))
                 if goal is not None:

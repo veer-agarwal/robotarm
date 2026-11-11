@@ -5,6 +5,9 @@
     python turret_cam_check.py --cam 1 --latency  measures the camera delay to use as turret_track.py --latency
     python turret_cam_check.py --cam 0 --laser-latency --nano COM11   same, timed with the turret's laser (better:
                                                   no monitor delay in it). Point the turret at a wall, not at anyone.
+    python turret_cam_check.py --cam 0 --width 1280 --height 720 --exposure -6 --laser-cal --nano COM11
+                                                  where does the laser land vs the camera's centre? Measure at 2-3
+                                                  distances from a wall; prints the turret_track.py correction flags.
 
 Latency test: a window flashes black/white. Point the camera at it (fill most of the picture, room lights dim is
 fine) and keep still. It times each flash from the moment it's drawn to the moment the camera sees it, 20 times.
@@ -182,6 +185,90 @@ def laser_latency(idx, w, h, fps, port, shots=20):
     print(f"use: turret_track.py --latency {np.median(r_) / 1000 - 0.004:.3f}   (half a frame taken off: the frame is exposed before it arrives)")
 
 
+def laser_cal(idx, w, h, fps, port, focal=641.0):
+    """Laser dot vs camera centre at several distances from a wall -> the laser's offset from the lens (metres,
+    matters up close) and its angle error (degrees, the same at every distance). turret_track.py aims with both."""
+    import serial
+    from turret_predict import Lens, pixel_bearing
+    cap = need(open_cam(idx, w, h, fps), idx)
+    lens = Lens(w, h, focal=focal * w / 1280.0, fisheye=True)
+    s = serial.Serial(port, 115200, timeout=0); time.sleep(2.0)
+    last = [0.0]
+
+    def laser(on):                                        # the ESP32 turns the laser off after 0.5 s without a '1'
+        if time.perf_counter() - last[0] > 0.1 or not on:
+            s.write(b"1" if on else b"0"); last[0] = time.perf_counter()
+
+    def mean_frame(on, sec):
+        laser(on); t = time.perf_counter(); acc, n = None, 0
+        while time.perf_counter() - t < sec:
+            laser(on)
+            ok, fr = cap.read()
+            if not ok: continue
+            if time.perf_counter() - t < 0.15: continue  # the switch takes a couple of frames to show
+            g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            acc = g if acc is None else acc + g; n += 1
+        return acc / max(n, 1)
+
+    def find_dot():
+        off = mean_frame(False, 0.45); on = mean_frame(True, 0.45)
+        diff = cv2.GaussianBlur(np.clip(on - off, 0, 255), (0, 0), 2)
+        _, peak, _, (px, py) = cv2.minMaxLoc(diff)
+        if peak < 15: return None, peak
+        r = 10                                            # centre of brightness around the peak = sub-pixel dot
+        x0, y0 = max(0, px - r), max(0, py - r)
+        roi = diff[y0:py + r + 1, x0:px + r + 1]; roi = np.where(roi > 0.5 * peak, roi, 0)
+        ys, xs = np.mgrid[y0:y0 + roi.shape[0], x0:x0 + roi.shape[1]]
+        return (float((xs * roi).sum() / roi.sum()), float((ys * roi).sum() / roi.sum())), peak
+
+    print("Point the turret square at a wall (nobody in front of it). For each distance: move the turret (or the\n"
+          "wall target) so the lens is that far from the dot, press SPACE in the picture window, then type the\n"
+          "distance from the LENS to the DOT in metres. Do 2-3 distances, close and far (e.g. 0.5, 1.5, 3).\n"
+          "Press Q when done.")
+    pts = []
+    win = "laser cal"; cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    while True:
+        laser(True)
+        ok, fr = cap.read()
+        if not ok: continue
+        v = fr.copy(); cx, cy = int(lens.cx), int(lens.cy)
+        cv2.line(v, (cx - 25, cy), (cx + 25, cy), (0, 255, 255), 1); cv2.line(v, (cx, cy - 25), (cx, cy + 25), (0, 255, 255), 1)
+        for (d, (px, py), _, _) in pts: cv2.circle(v, (int(px), int(py)), 8, (0, 255, 0), 2)
+        cv2.putText(v, f"{len(pts)} measured   SPACE measure   Q done", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        cv2.imshow(win, v)
+        k = cv2.waitKey(1) & 0xFF
+        if k == ord("q"): break
+        if k != ord(" "): continue
+        dot, peak = find_dot()
+        laser(False)
+        if dot is None:
+            print(f"  can't see the dot (brightness change {peak:.0f}). Dim the lights or move closer."); continue
+        bp, bt = pixel_bearing(lens, 0.0, 0.0, *dot)
+        right, down = -bp, -bt                             # bearings are + left / + up
+        try:
+            d = float(input(f"  dot at pixel ({dot[0]:.0f}, {dot[1]:.0f}) = {right:+.2f} deg right, {down:+.2f} deg down. "
+                            "Distance lens->dot, metres: "))
+        except ValueError:
+            print("  not a number, skipped"); continue
+        pts.append((d, dot, right, down))
+    s.write(b"0"); s.close(); cap.release(); cv2.destroyAllWindows()
+    if len(pts) < 2:
+        sys.exit("Need at least 2 distances (one close, one far) to separate the laser's offset from its angle.")
+    d = np.array([p[0] for p in pts]); R = np.array([p[2] for p in pts]); Dn = np.array([p[3] for p in pts])
+    # dot angle at distance d = atan(offset / d) + trim  ~=  offset * (1/d) [rad] + trim
+    A = np.stack([np.degrees(1.0 / d), np.ones_like(d)], 1)
+    (mr, tr), *_ = np.linalg.lstsq(A, R, rcond=None)
+    (mb, tb), *_ = np.linalg.lstsq(A, Dn, rcond=None)
+    print("\n dist   right   down   (deg; fit error)")
+    for i in range(len(d)):
+        fr_, fd_ = A[i] @ [mr, tr], A[i] @ [mb, tb]
+        print(f" {d[i]:4.2f}m  {R[i]:+6.2f}  {Dn[i]:+6.2f}   ({R[i] - fr_:+.2f}, {Dn[i] - fd_:+.2f})")
+    print(f"\nlaser sits {mb * 100:+.1f} cm below and {mr * 100:+.1f} cm right of the lens, and points "
+          f"{tb:+.2f} deg down, {tr:+.2f} deg right of the camera's centre")
+    print(f"use:  turret_track.py ... --muzzle-below {mb:.3f} --muzzle-right {mr:.3f} "
+          f"--laser-trim-down {tb:.2f} --laser-trim-right {tr:.2f}")
+
+
 def diagnose(idx, w, h, fps):
     """Try every known way of opening the camera in this mode and report format + real frame rate for each."""
     from camopen import fourcc
@@ -276,6 +363,8 @@ def main():
     ap.add_argument("--fps", type=int, default=120)
     ap.add_argument("--view", action="store_true"); ap.add_argument("--latency", action="store_true")
     ap.add_argument("--laser-latency", action="store_true"); ap.add_argument("--nano", default="COM11")
+    ap.add_argument("--laser-cal", action="store_true", help="measure where the laser lands vs the camera centre (needs --nano)")
+    ap.add_argument("--focal", type=float, default=641.0, help="fisheye focal length at 1280 px wide (--laser-cal)")
     ap.add_argument("--diagnose", action="store_true", help="try every way of opening the camera; report fps for each")
     ap.add_argument("--fov", action="store_true", help="measure the real field of view by turning the turret (needs --port)")
     ap.add_argument("--port", default="COM9", help="turret servo board, for --fov")
@@ -287,6 +376,7 @@ def main():
     elif a.view: view(a.cam, a.width, a.height, a.fps)
     elif a.latency: latency(a.cam, a.width, a.height, a.fps)
     elif a.laser_latency: laser_latency(a.cam, a.width, a.height, a.fps, a.nano)
+    elif a.laser_cal: laser_cal(a.cam, a.width, a.height, a.fps, a.nano, a.focal)
     else: probe(a.cam)
 
 
