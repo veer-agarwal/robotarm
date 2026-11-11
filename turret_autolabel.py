@@ -1,7 +1,8 @@
 """Label drone clips with the trained detector; you only look at the frames it isn't sure about.
 
     python turret_autolabel.py recordings\\clip_*.mp4          new clips -> datasets\\tello
-    python turret_autolabel.py --fix                           re-check the labels already in datasets\\tello
+    python turret_autolabel.py --fix                           re-check the held-out (val) labels in datasets\\tello
+    python turret_autolabel.py --fix --split all               ... or every label
                                                                (the old tracker-made labels drifted in places)
 
 For each frame (every 3rd of a clip) the detector looks for the drone:
@@ -49,6 +50,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("clips", nargs="*")
     ap.add_argument("--fix", action="store_true", help="re-check datasets\\tello's existing labels instead")
+    ap.add_argument("--split", default="val", choices=["val", "train", "all"],
+                    help="with --fix: which labels to re-check (default val, the held-out clip the score comes from)")
     ap.add_argument("--weights", default=os.path.join("models", "tello.pt"))
     ap.add_argument("--out", default=os.path.join("datasets", "tello"))
     ap.add_argument("--every", type=int, default=3)
@@ -59,7 +62,7 @@ def main():
     model = YOLO(a.weights); dev = 0 if torch.cuda.is_available() else "cpu"
 
     def detect(img):
-        r = model.predict(img, imgsz=640, conf=0.05, device=dev, half=dev == 0, verbose=False, max_det=5)[0]
+        r = model.predict(img, imgsz=640, conf=0.05, device=dev, verbose=False, max_det=5)[0]
         return sorted([((float(x0), float(y0), float(x1 - x0), float(y1 - y0)), float(c))
                        for (x0, y0, x1, y1), c in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy())],
                       key=lambda d: -d[1])
@@ -67,7 +70,7 @@ def main():
     # ---- frames, one at a time: (image, path the image lives at / goes to, label path)
     def frames():
         if a.fix:
-            for img_p in sorted(glob.glob(os.path.join(a.out, "images", "*", "*.jpg"))):
+            for img_p in sorted(glob.glob(os.path.join(a.out, "images", "*" if a.split == "all" else a.split, "*.jpg"))):
                 yield cv2.imread(img_p), img_p, img_p.replace(os.sep + "images" + os.sep, os.sep + "labels" + os.sep)[:-4] + ".txt"
             return
         clips = [f for pat in a.clips for f in glob.glob(pat)]

@@ -172,7 +172,7 @@ class Detector:
         import time
         if frame.ndim == 2: frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         t = time.perf_counter()
-        r = self.m.predict(frame, imgsz=self.imgsz, conf=self.conf, device=self.dev, half=self.half,
+        r = self.m.predict(frame, imgsz=self.imgsz, conf=self.conf, device=self.dev,
                            max_det=10, verbose=False)[0]
         self.ms = 0.9 * self.ms + 0.1 * 1000 * (time.perf_counter() - t)
         return [((float(x0), float(y0), float(x1 - x0), float(y1 - y0)), float(c))
