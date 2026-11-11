@@ -132,8 +132,9 @@ def draw(frame, st, out_w=1280):
     cv2.rectangle(img, (int(bx), int(by)), (int(bx + 64 * u), int(by + 22 * u)), col, 1)
     _text(img, f"{tilt:+.1f}", (bx + 32 * u, by + 16 * u), ts, col, anchor="c")
 
-    # -- crosshair: two bars with a gap
+    # -- crosshair: two bars with a gap, at the laser's aim point when known (else the picture centre)
     cx, cy = OW // 2, OH // 2
+    if st.get("aim_px") is not None: cx, cy = int(round(st["aim_px"][0] * k)), int(round(st["aim_px"][1] * k))
     cv2.line(img, (int(cx - 30 * u), cy), (int(cx - 8 * u), cy), WHITE, 2, cv2.LINE_AA)
     cv2.line(img, (int(cx + 8 * u), cy), (int(cx + 30 * u), cy), WHITE, 2, cv2.LINE_AA)
 

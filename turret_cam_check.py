@@ -199,57 +199,77 @@ def laser_cal(idx, w, h, fps, port, focal=641.0):
         if time.perf_counter() - last[0] > 0.1 or not on:
             s.write(b"1" if on else b"0"); last[0] = time.perf_counter()
 
-    def mean_frame(on, sec):
-        laser(on); t = time.perf_counter(); acc, n = None, 0
-        while time.perf_counter() - t < sec:
-            laser(on)
-            ok, fr = cap.read()
-            if not ok: continue
-            if time.perf_counter() - t < 0.15: continue  # the switch takes a couple of frames to show
-            g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY).astype(np.float32)
-            acc = g if acc is None else acc + g; n += 1
-        return acc / max(n, 1)
-
-    def find_dot():
-        off = mean_frame(False, 0.45); on = mean_frame(True, 0.45)
-        diff = cv2.GaussianBlur(np.clip(on - off, 0, 255), (0, 0), 2)
-        _, peak, _, (px, py) = cv2.minMaxLoc(diff)
-        if peak < 15: return None, peak
-        r = 10                                            # centre of brightness around the peak = sub-pixel dot
-        x0, y0 = max(0, px - r), max(0, py - r)
-        roi = diff[y0:py + r + 1, x0:px + r + 1]; roi = np.where(roi > 0.5 * peak, roi, 0)
-        ys, xs = np.mgrid[y0:y0 + roi.shape[0], x0:x0 + roi.shape[1]]
-        return (float((xs * roi).sum() / roi.sum()), float((ys * roi).sum() / roi.sum())), peak
-
-    print("Point the turret square at a wall (nobody in front of it). For each distance: move the turret (or the\n"
-          "wall target) so the lens is that far from the dot, press SPACE in the picture window, then type the\n"
-          "distance from the LENS to the DOT in metres. Do 2-3 distances, close and far (e.g. 0.5, 1.5, 3).\n"
-          "Press Q when done.")
+    print("Point the turret square at a wall (nobody in front of it). For each distance:\n"
+          "  SPACE   freeze the picture (laser on)\n"
+          "  click   on the dot (it snaps to the brightest spot nearby; a magnifier follows the mouse); click again to redo\n"
+          "  type    the distance from the LENS to the DOT in metres, then ENTER   (ESC = cancel this one)\n"
+          "Do 2-3 distances, close and far (e.g. 0.5, 1.5, 3+). Q when done.")
     pts = []
     win = "laser cal"; cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    mouse = {"xy": None, "click": None}
+
+    def on_mouse(ev, x, y, flags, _):
+        mouse["xy"] = (x, y)
+        if ev == cv2.EVENT_LBUTTONDOWN: mouse["click"] = (x, y)
+    cv2.setMouseCallback(win, on_mouse)
+
+    def snap(img, x, y, r=12):
+        """Brightest spot within r px of the click (centre of brightness, sub-pixel)."""
+        g = cv2.GaussianBlur(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 1.5)
+        x0, y0 = max(0, x - r), max(0, y - r)
+        roi = g[y0:y + r + 1, x0:x + r + 1]
+        if roi.size == 0: return float(x), float(y)
+        pk = roi.max(); lo = np.median(roi)
+        if pk - lo < 10: return float(x), float(y)                   # nothing bright there: take the click as is
+        wgt = np.where(roi > lo + 0.6 * (pk - lo), roi - lo, 0)
+        ys, xs = np.mgrid[y0:y0 + roi.shape[0], x0:x0 + roi.shape[1]]
+        return float((xs * wgt).sum() / wgt.sum()), float((ys * wgt).sum() / wgt.sum())
+
+    def draw(img, dot=None, typed=None, msg=""):
+        v = img.copy(); cx, cy = int(lens.cx), int(lens.cy)
+        cv2.line(v, (cx - 25, cy), (cx + 25, cy), (0, 255, 255), 1); cv2.line(v, (cx, cy - 25), (cx, cy + 25), (0, 255, 255), 1)
+        for p in pts: cv2.circle(v, (int(p[1][0]), int(p[1][1])), 8, (0, 255, 0), 1)
+        if dot: cv2.drawMarker(v, (int(round(dot[0])), int(round(dot[1]))), (0, 0, 255), cv2.MARKER_CROSS, 24, 2)
+        if mouse["xy"]:                                           # 6x magnifier of the area under the mouse
+            mx, my = mouse["xy"]; r = 20
+            crop = img[max(0, my - r):my + r, max(0, mx - r):mx + r]
+            if crop.shape[0] > 4 and crop.shape[1] > 4:
+                z = cv2.resize(crop, (crop.shape[1] * 6, crop.shape[0] * 6), interpolation=cv2.INTER_NEAREST)
+                zh, zw = z.shape[:2]; v[10:10 + zh, v.shape[1] - 10 - zw:v.shape[1] - 10] = z
+                cv2.rectangle(v, (v.shape[1] - 10 - zw, 10), (v.shape[1] - 10, 10 + zh), (0, 255, 255), 1)
+        line = msg or (f"{len(pts)} measured   SPACE freeze   Q done" if typed is None else f"distance (m): {typed}_   ENTER ok   ESC cancel")
+        cv2.putText(v, line, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        return v
+
     while True:
         laser(True)
         ok, fr = cap.read()
         if not ok: continue
-        v = fr.copy(); cx, cy = int(lens.cx), int(lens.cy)
-        cv2.line(v, (cx - 25, cy), (cx + 25, cy), (0, 255, 255), 1); cv2.line(v, (cx, cy - 25), (cx, cy + 25), (0, 255, 255), 1)
-        for (d, (px, py), _, _) in pts: cv2.circle(v, (int(px), int(py)), 8, (0, 255, 0), 2)
-        cv2.putText(v, f"{len(pts)} measured   SPACE measure   Q done", (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        cv2.imshow(win, v)
+        cv2.imshow(win, draw(fr))
         k = cv2.waitKey(1) & 0xFF
         if k == ord("q"): break
         if k != ord(" "): continue
-        dot, peak = find_dot()
-        laser(False)
-        if dot is None:
-            print(f"  can't see the dot (brightness change {peak:.0f}). Dim the lights or move closer."); continue
-        bp, bt = pixel_bearing(lens, 0.0, 0.0, *dot)
-        right, down = -bp, -bt                             # bearings are + left / + up
+        still = fr.copy(); laser(False)                          # frozen picture; laser off while you click
+        dot, typed, mouse["click"] = None, None, None
+        while True:
+            if mouse["click"]:
+                dot = snap(still, *mouse["click"]); mouse["click"] = None
+                if typed is None: typed = ""
+            cv2.imshow(win, draw(still, dot, typed, "" if dot else "click on the laser dot   ESC cancel"))
+            k = cv2.waitKey(20) & 0xFF
+            if k == 27: dot = None; break
+            if typed is not None:
+                if k in (13, 10) and typed: break
+                if k == 8: typed = typed[:-1]
+                elif chr(k) in "0123456789." and k != 255: typed += chr(k)
+        if dot is None: print("  cancelled"); continue
         try:
-            d = float(input(f"  dot at pixel ({dot[0]:.0f}, {dot[1]:.0f}) = {right:+.2f} deg right, {down:+.2f} deg down. "
-                            "Distance lens->dot, metres: "))
+            d = float(typed)
         except ValueError:
             print("  not a number, skipped"); continue
+        bp, bt = pixel_bearing(lens, 0.0, 0.0, *dot)
+        right, down = -bp, -bt                             # bearings are + left / + up
+        print(f"  {d:.2f} m: dot at pixel ({dot[0]:.1f}, {dot[1]:.1f}) = {right:+.2f} deg right, {down:+.2f} deg down")
         pts.append((d, dot, right, down))
     s.write(b"0"); s.close(); cap.release(); cv2.destroyAllWindows()
     if len(pts) < 2:

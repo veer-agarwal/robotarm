@@ -379,6 +379,15 @@ def main():
             if det is not None:
                 hud["tracker"] = f"YOLO {det.ms:.0f}MS"
                 if state == "SEARCH": hud["reason"] = "SEARCHING FOR A DRONE" + (f"  ({len(acq)}/3)" if acq else "")
+            if lens is not None and mode == "predict":
+                # crosshair = where the laser lands at the target's range (3 m when there's no target)
+                R = rng_est or 3.0
+                rt = math.radians(a.laser_trim_right + math.degrees(math.atan2(a.muzzle_right, R)))
+                dn = math.radians(a.laser_trim_down + math.degrees(math.atan2(a.muzzle_below, R)))
+                if getattr(lens, "fisheye", False):
+                    hud["aim_px"] = (lens.cx + lens.f * rt, lens.cy + lens.f * dn)
+                else:
+                    hud["aim_px"] = (lens.cx + lens.f * math.tan(rt), lens.cy + lens.f * math.tan(dn))
             cv2.imshow(win, turret_hud.draw(frame, hud, out_w=max(1280, W)))
             k = cv2.waitKey(1) & 0xFF
             if k in (ord("q"), 27): break
