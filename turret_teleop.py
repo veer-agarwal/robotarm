@@ -130,6 +130,11 @@ def main():
             else:
                 pan += flips[0] * vx * PAN_RATE * dt
                 tilt += flips[1] * vy * TILT_RATE * dt
+                if prev.get("stick") and not (vx or vy):     # stick just released: stop where the turret IS,
+                    here = servos.read_deg()                 # not where the target had run ahead to
+                    if here is not None:
+                        pan, tilt = here
+                prev["stick"] = bool(vx or vy)
                 if hx or hy:
                     key = (hx, hy)
                     if prev.get("hat") != key:
