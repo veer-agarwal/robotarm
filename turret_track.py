@@ -134,6 +134,7 @@ def dart_time(rng, v0, k):
     return (math.exp(k * rng) - 1) / (k * v0) if k > 0 else rng / v0
 
 
+LEAD_FADE = (4.0, 10.0)              # deg/s: no lead below 4, full lead above 10
 TARGET_SIZE = 0.25                   # effective Tello box width, metres (fit: 45 in measured vs 0.9 m read at 0.20)
 
 
@@ -313,7 +314,11 @@ def main():
                 t_cap = t_frame - a.latency
                 pm, tm = angle_at(angle_hist, t_cap)               # where the turret pointed when the frame was taken
                 flight = dart_time(rng_est, a.dart_speed, a.dart_drag) if rng_est else 0.0
-                aim.lead = a.lead + flight                          # darts: also lead by their flight time
+                # darts: also lead by their flight time. Fade the lead out below LEAD_FADE deg/s: on a still drone the
+                # rate estimate is just box jitter, and leading by it makes the aim wander
+                rate_now = math.hypot(aim.kp.x[1], aim.kt.x[1]) if getattr(aim, "kp", None) is not None else 0.0
+                w = min(1.0, max(0.0, (rate_now - LEAD_FADE[0]) / (LEAD_FADE[1] - LEAD_FADE[0])))
+                aim.lead = (a.lead + flight) * w
                 goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
                 if goal is not None and max(abs(aim.kp.x[1]), abs(aim.kt.x[1])) > 300:
                     goal = None                                      # runaway (target "moving" > 300 deg/s): let go
