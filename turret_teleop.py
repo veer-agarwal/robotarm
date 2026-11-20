@@ -23,6 +23,7 @@ AX_LX, AX_LY, AX_RX, AX_RY, AX_LT, AX_RT = 0, 1, 2, 3, 4, 5
 BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, BTN_BACK, BTN_START = 0, 1, 2, 3, 4, 5, 6, 7
 DEADZONE = 0.12
 PAN_RATE, TILT_RATE = 90.0, 60.0      # deg/s at full left stick
+MAX_LEAD = 3.0                         # deg the stick target may run ahead of the turret
 FINE = 0.25                           # right stick speed factor
 NUDGE = 0.5                           # deg per D-pad press
 HZ = 50
@@ -130,11 +131,11 @@ def main():
             else:
                 pan += flips[0] * vx * PAN_RATE * dt
                 tilt += flips[1] * vy * TILT_RATE * dt
-                if prev.get("stick") and not (vx or vy):     # stick just released: stop where the turret IS,
-                    here = servos.read_deg()                 # not where the target had run ahead to
+                if vx or vy:                                 # keep the target close to where the turret IS, so
+                    here = servos.read_deg()                 # letting go doesn't leave it far ahead (no coast)
                     if here is not None:
-                        pan, tilt = here
-                prev["stick"] = bool(vx or vy)
+                        pan = float(np.clip(pan, here[0] - MAX_LEAD, here[0] + MAX_LEAD))
+                        tilt = float(np.clip(tilt, here[1] - MAX_LEAD, here[1] + MAX_LEAD))
                 if hx or hy:
                     key = (hx, hy)
                     if prev.get("hat") != key:
