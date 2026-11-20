@@ -126,6 +126,14 @@ class Servos:
 
 
 SPINUP, REV_HOLD = 0.3, 0.6          # blaster: flywheel spin-up before the pusher runs; keep spinning after a burst
+def dart_time(rng, v0, k):
+    """Flight time of a foam dart over rng metres: v0 = muzzle speed (m/s), k = quadratic drag (1/m, a = -k v^2).
+    With drag the speed falls as v0*exp(-k x), so t = (exp(k*rng) - 1) / (k*v0)."""
+    if not rng or v0 <= 0:
+        return 0.0
+    return (math.exp(k * rng) - 1) / (k * v0) if k > 0 else rng / v0
+
+
 TARGET_SIZE = 0.20                   # Tello with prop guards, metres (used to estimate range from the box size)
 
 
@@ -210,6 +218,10 @@ def main():
     ap.add_argument("--laser-trim-right", type=float, default=0.0, help="deg it points right of the camera centre")
     ap.add_argument("--dart-speed", type=float, default=0.0,
                     help="m/s; 0 = laser (no drop). With darts (~30) it aims up for drop and leads for flight time")
+    ap.add_argument("--dart-drag", type=float, default=0.045,
+                    help="dart air drag k (1/m): ~0.045 for a 1.3 g foam dart; raise if far shots land low but close ones are on")
+    ap.add_argument("--target-size", type=float, default=TARGET_SIZE,
+                    help="drone width the range estimate assumes, metres: raise if the HUD range reads short, lower if long")
     ap.add_argument("--mask", help="ignore part of the picture, fractions x0,y0,x1,y1 (e.g. the laser block: 0.4,0.85,0.6,1)")
     ap.add_argument("--blaster", action="store_true", help="the --nano ESP32 also drives the rev/fire relays")
     ap.add_argument("--log", action="store_true", help="predict mode: write recordings/track_log_<time>.csv for tuning")
@@ -300,7 +312,7 @@ def main():
             if mode == "predict" and aim is not None and angle_hist:
                 t_cap = t_frame - a.latency
                 pm, tm = angle_at(angle_hist, t_cap)               # where the turret pointed when the frame was taken
-                flight = (rng_est / a.dart_speed) if (rng_est and a.dart_speed > 0) else 0.0
+                flight = dart_time(rng_est, a.dart_speed, a.dart_drag) if rng_est else 0.0
                 aim.lead = a.lead + flight                          # darts: also lead by their flight time
                 goal, locked = aim.update(frame, t_cap, pm, tm, time.perf_counter())
                 if goal is not None and max(abs(aim.kp.x[1]), abs(aim.kt.x[1])) > 300:
@@ -309,7 +321,7 @@ def main():
                 if aim is not None and aim.box is not None:          # range from how big the drone looks
                     half_px = max(aim.box[2], aim.box[3]) / 2
                     if half_px > 1:
-                        r_now = (TARGET_SIZE / 2) * lens.f / half_px
+                        r_now = (a.target_size / 2) * lens.f / half_px
                         rng_est = r_now if rng_est is None else 0.8 * rng_est + 0.2 * r_now
                 corr_p, corr_t = a.laser_trim_right, a.laser_trim_down   # laser not quite parallel to the camera
                 # (+ = aim left / up: a dot that lands right / low is fixed by aiming left / up)
@@ -317,7 +329,9 @@ def main():
                     corr_t += math.degrees(math.atan2(a.muzzle_below, rng_est))   # muzzle isn't on the camera axis
                     corr_p += math.degrees(math.atan2(a.muzzle_right, rng_est))
                     if a.dart_speed > 0:
-                        corr_t += math.degrees(math.atan2(0.5 * 9.81 * flight ** 2, rng_est))
+                        # drop across the line of fire: gravity's component perpendicular to it (cos of elevation)
+                        g_perp = 9.81 * math.cos(math.radians(tm))
+                        corr_t += math.degrees(math.atan2(0.5 * g_perp * flight ** 2, rng_est))
                 if goal is not None:
                     goal = (goal[0] + corr_p, goal[1] + corr_t)
                 if goal is None:
