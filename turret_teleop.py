@@ -23,6 +23,7 @@ AX_LX, AX_LY, AX_RX, AX_RY, AX_LT, AX_RT = 0, 1, 2, 3, 4, 5
 BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, BTN_BACK, BTN_START = 0, 1, 2, 3, 4, 5, 6, 7
 DEADZONE = 0.12
 PAN_RATE, TILT_RATE = 90.0, 60.0      # deg/s at full left stick
+LEAD_MIN, LEAD_S = 0.5, 0.04             # stick target lead: 0.5 deg + 40 ms of motion (4.1 deg at full pan)
 FINE = 0.25                           # right stick speed factor
 NUDGE = 0.5                           # deg per D-pad press
 HZ = 50
@@ -61,8 +62,7 @@ def hud(frame, pan, tilt, armed, firing, lim, flips):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", required=True, help="turret servo board (CH343), e.g. COM9")
-    ap.add_argument("--stop-scale", type=float, default=1.8, help="release stop point x this: raise if it overshoots and comes back, lower if it creeps on after release")
-    ap.add_argument("--acc", type=int, default=150, help="servo acceleration 1-254: higher = stops sooner when you let go (40 coasts ~11 deg)")
+    ap.add_argument("--acc", type=int, default=254, help="servo acceleration 1-254: higher = stops sooner when you let go (40 coasts ~11 deg)")
     ap.add_argument("--laser", help="ESP32 running turret_laser.ino, e.g. COM10 (optional)")
     ap.add_argument("--cam", type=int, default=-1, help="webcam index (e.g. 0); default: no camera")
     ap.add_argument("--width", type=int, default=640); ap.add_argument("--height", type=int, default=480)
@@ -94,31 +94,6 @@ def main():
     pan = tilt = 0.0
     flips = [-1 if a.flip_pan else 1, -1 if a.flip_tilt else 1]
     armed = False
-    acc_deg = a.acc * 100 / TPD                       # servo ACC register is in 100 steps/s^2
-    vel, spd = {PAN_ID: 0.0, TILT_ID: 0.0}, {PAN_ID: 2500, TILT_ID: 2500}
-
-    def set_speed(sid, steps):
-        steps = int(max(20, min(2500, steps)))
-        if abs(steps - spd[sid]) > 0.05 * spd[sid]:
-            servos.bus.write(sid, ADDR_SPEED, steps, 2); spd[sid] = steps
-
-    def drive(pan, tilt, vx, vy):
-        """Stick = speed. Held: head for the end of the range at the stick's speed (the servo does the motion,
-        nothing runs ahead). Released: aim at where it naturally stops (v^2 / 2a), so no coast and no snap back."""
-        out, here = [pan, tilt], None
-        for i, (sid, v, rate) in enumerate(((PAN_ID, flips[0] * vx, PAN_RATE), (TILT_ID, flips[1] * vy, TILT_RATE))):
-            if v:
-                set_speed(sid, abs(v) * rate * TPD)
-                out[i] = lim[sid][1] if v > 0 else lim[sid][0]
-                vel[sid] = v * rate
-            elif vel[sid]:
-                here = here or servos.read_deg()
-                if here is not None:
-                    out[i] = here[i] + a.stop_scale * np.sign(vel[sid]) * vel[sid] ** 2 / (2 * acc_deg)
-                vel[sid] = 0.0
-                set_speed(sid, 2500)
-        return out[0], out[1]
-
     prev = {}
     homing = False
     print("Ready. Y arms the laser, RT fires, B quits.")
@@ -154,7 +129,15 @@ def main():
                 pan *= 0.9 if abs(pan) > 0.3 else 0; tilt *= 0.9 if abs(tilt) > 0.3 else 0
                 homing = bool(pan or tilt)
             else:
-                pan, tilt = drive(pan, tilt, vx, vy)
+                pan += flips[0] * vx * PAN_RATE * dt
+                tilt += flips[1] * vy * TILT_RATE * dt
+                if vx or vy:                                 # target may only lead the turret by a little (scaled with
+                    here = servos.read_deg()                 # stick speed): full speed while held, no long coast after
+                    if here is not None:
+                        lp = LEAD_MIN + abs(vx) * PAN_RATE * LEAD_S
+                        lt = LEAD_MIN + abs(vy) * TILT_RATE * LEAD_S
+                        pan = float(np.clip(pan, here[0] - lp, here[0] + lp))
+                        tilt = float(np.clip(tilt, here[1] - lt, here[1] + lt))
                 if hx or hy:
                     key = (hx, hy)
                     if prev.get("hat") != key:
