@@ -134,7 +134,7 @@ def dart_time(rng, v0, k):
     return (math.exp(k * rng) - 1) / (k * v0) if k > 0 else rng / v0
 
 
-TARGET_SIZE = 0.20                   # Tello with prop guards, metres (used to estimate range from the box size)
+TARGET_SIZE = 0.25                   # effective Tello box width, metres (fit: 45 in measured vs 0.9 m read at 0.20)
 
 
 class Laser:
