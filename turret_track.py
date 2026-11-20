@@ -16,7 +16,8 @@ Modes (F cycles):
            and aims where it will be (turret_predict.py). Use this one for the drone. Reads the servo angles each
            frame, so it needs --port. Set --hfov (or --dfov) to your lens.
 
-Keys:  C  click a new target (draw a box, Enter)    X  drop the target    F  next mode
+Keys:  C  click a new target (draw a box, Enter)    X  drop the target    M  next mode
+       F  single shot (--blaster): revs, fires ONE dart once spun up and on target, no need to arm with L
        R  start/stop recording raw video to recordings\\  (for drone clips -> turret_label.py)
        L  arm/disarm the laser. It fires only in the FIRE state: locked 150 ms, aim error under 0.5 deg,
           prediction steady (turret_hud.py has the rule and the HUD)
@@ -125,6 +126,7 @@ class Servos:
         self.bus.close()
 
 
+SHOT_TIME, SHOT_WAIT = 0.15, 3.0     # single shot (F): pusher on-time for one dart; give up if no lock within this
 SPINUP, REV_HOLD = 0.3, 0.6          # blaster: flywheel spin-up before the pusher runs; keep spinning after a burst
 def dart_time(rng, v0, k):
     """Flight time of a foam dart over rng metres: v0 = muzzle speed (m/s), k = quadratic drag (1/m, a = -k v^2).
@@ -151,13 +153,31 @@ class Laser:
         self.last = 0.0
 
         self.blaster = False; self.rev = False; self.fire = False; self.rev_since = 0.0; self.fire_until = 0.0
+        self.shot_deadline = None; self.shot_end = None; self.shot_time = SHOT_TIME; self.sent = None
 
-    def set(self, on, blaster_fire=False):
+    def shot(self):
+        """F key: one dart. Revs now, pushes once for shot_time when spun up AND the aim is on target (fire rule
+        'ready'), gives up after SHOT_WAIT s without that."""
+        if self.blaster and self.shot_deadline is None:
+            self.shot_deadline = time.time() + SHOT_WAIT; self.shot_end = None
+            print("single shot: spinning up...")
+
+    def set(self, on, blaster_fire=False, shot_ok=False):
         """Called every frame. on = laser. blaster_fire = FIRE state while armed (only used with --blaster):
         flywheels rev, the pusher runs once they've spun up (the ESP32 enforces that too), and the flywheels keep
         spinning for REV_HOLD s after the last shot so the next burst is instant."""
         now = time.time()
-        if self.blaster:
+        if self.blaster and self.shot_deadline is not None:      # single shot in progress
+            if not self.rev: self.rev, self.rev_since = True, now
+            self.fire_until = max(self.fire_until, now + REV_HOLD)
+            if self.shot_end is not None:
+                self.fire = now < self.shot_end
+                if not self.fire: self.shot_deadline = None; print("single shot: done")
+            elif now - self.rev_since >= SPINUP and shot_ok:
+                self.shot_end, self.fire = now + self.shot_time, True
+            elif now > self.shot_deadline:
+                self.shot_deadline = None; self.fire = False; print("single shot: cancelled (no lock on target)")
+        elif self.blaster:
             if blaster_fire:
                 if not self.rev: self.rev, self.rev_since = True, now
                 self.fire_until = now + REV_HOLD
@@ -165,10 +185,10 @@ class Laser:
             else:
                 self.fire = False
                 if self.rev and now > self.fire_until: self.rev = False
-        if now - self.last > 0.1:
-            msg = b"1" if on else b"0"
-            if self.blaster: msg += (b"R" if self.rev else b"r") + (b"F" if self.fire else b"f")
-            self.s.write(msg); self.last = now
+        msg = b"1" if on else b"0"
+        if self.blaster: msg += (b"R" if self.rev else b"r") + (b"F" if self.fire else b"f")
+        if msg != self.sent or now - self.last > 0.1:          # changes go out at once (a short shot isn't rounded
+            self.s.write(msg); self.last = now; self.sent = msg  # to the 10 Hz keep-alive)
 
     def close(self):
         try: self.s.write(b"0rf"); self.s.close()
@@ -225,6 +245,8 @@ def main():
                     help="drone width the range estimate assumes, metres: raise if the HUD range reads short, lower if long")
     ap.add_argument("--mask", help="ignore part of the picture, fractions x0,y0,x1,y1 (e.g. the laser block: 0.4,0.85,0.6,1)")
     ap.add_argument("--blaster", action="store_true", help="the --nano ESP32 also drives the rev/fire relays")
+    ap.add_argument("--shot-time", type=float, default=SHOT_TIME,
+                    help="F single shot: pusher on-time, s. Two darts come out -> lower it; none or a half push -> raise it")
     ap.add_argument("--log", action="store_true", help="predict mode: write recordings/track_log_<time>.csv for tuning")
     a = ap.parse_args()
     if a.mode == "predict" and not a.port:
@@ -245,7 +267,7 @@ def main():
     acq = []                                         # detector: recent best detections while searching
     if a.blaster:
         if not laser: sys.exit("--blaster needs --nano (the ESP32's port)")
-        laser.blaster = True
+        laser.blaster = True; laser.shot_time = a.shot_time
     mask = [float(v) for v in a.mask.split(",")] if a.mask else None
     rng_est = None                                   # filtered range to the target, metres
     log = None
@@ -389,7 +411,7 @@ def main():
                 size = aim.size_px() if (mode == "predict" and aim is not None) else max(hud["box"][2], hud["box"][3])
                 half = math.degrees(math.atan(size / 2 / lens.f))
             state = fc.update(tracking, hud["err"], steady, armed, half)
-            if laser: laser.set(state == "FIRE", blaster_fire=(state == "FIRE" and armed))
+            if laser: laser.set(state == "FIRE", blaster_fire=(state == "FIRE" and armed), shot_ok=fc.ready)
 
             # HUD (drawn on a scaled copy; recordings stay clean)
             hud.update(state=state, reason=fc.reason, hold_ms=fc.hold_ms, armed=armed, pan=pan, tilt=tilt, fps=fps_est,
@@ -422,6 +444,9 @@ def main():
                         tracker, tname = make_tracker(); tracker.init(raw, r); box = r
             elif k == ord("x"): tracker = None; box = None; aim = None
             elif k == ord("f"):
+                if laser and laser.blaster: laser.shot()
+                else: print("F = single shot, needs --blaster (M changes mode)")
+            elif k == ord("m"):
                 order = ["fixed", "follow"] + (["predict"] if servos else [])
                 mode = order[(order.index(mode) + 1) % len(order)]; tracker = None; aim = None
                 if mode == "predict":
