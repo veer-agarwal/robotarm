@@ -10,6 +10,7 @@ and the 12 V supply on. New servos all ship as ID 1, so plug in ONE servo at a t
     python turret_setup.py wiggle --port COM9 --id 7  small back-and-forth test, ends centred
     python turret_setup.py limits --port COM9         save the angle limits IN the servos (pan +-120, tilt +-40)
     python turret_setup.py teach  --port COM9         per axis: jog to HOME (straight ahead), then the 2 limits; saves all
+    python turret_setup.py teach  --port COM9 --axis tilt   same, tilt only (pan keeps its home + limits)
     python turret_setup.py sethome --port COM9        jog to where "straight ahead" should be; limits stay where they are
     python turret_setup.py test   --port COM9         slow pan + tilt sweep, Enter between steps, stops on a snag
 
@@ -201,12 +202,14 @@ def recenter(bus, sid):
     return set_offset(bus, sid, real - CENTRE)
 
 
-def teach(bus):
+def teach(bus, axis="both"):
     """Per servo: jog to HOME (straight ahead) first, then the two limits. Limits go into the servo, home into the json."""
     saved = load_saved()
     home = saved.setdefault("home", {})
     for sid, name, minus, plus, ends in ((PAN_ID, "PAN", "a", "d", ("LEFT", "RIGHT")),
                                           (TILT_ID, "TILT", "s", "w", ("DOWN", "UP"))):
+        if axis != "both" and name.lower() != axis:
+            continue
         if not bus.ping(sid):
             print(f"ID {sid} ({name}) not found, skipped"); continue
         old = saved.get(str(sid), (0, 4095))
@@ -300,6 +303,7 @@ def main():
     ap.add_argument("--to", type=int, help="new ID for assign (7 = pan, 8 = tilt)")
     ap.add_argument("--id", type=int, help="servo ID for center / wiggle")
     ap.add_argument("--pan-max", type=int, default=120, help="pan limit, deg each way (cable loop: max 120)")
+    ap.add_argument("--axis", choices=["both", "pan", "tilt"], default="both", help="teach: which axis to redo")
     ap.add_argument("--tilt-max", type=int, default=40, help="tilt limit, deg each way (40 laser plate, 20 Perses)")
     a = ap.parse_args()
 
@@ -343,7 +347,7 @@ def main():
             print("The servos now refuse to move past these, even if a script asks them to.")
         elif a.cmd == "teach":
             sid = PAN_ID
-            teach(bus)
+            teach(bus, a.axis)
         elif a.cmd == "sethome":
             sid = PAN_ID
             sethome(bus)
