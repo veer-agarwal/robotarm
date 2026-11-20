@@ -61,6 +61,7 @@ def hud(frame, pan, tilt, armed, firing, lim, flips):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", required=True, help="turret servo board (CH343), e.g. COM9")
+    ap.add_argument("--stop-scale", type=float, default=1.8, help="release stop point x this: raise if it overshoots and comes back, lower if it creeps on after release")
     ap.add_argument("--acc", type=int, default=150, help="servo acceleration 1-254: higher = stops sooner when you let go (40 coasts ~11 deg)")
     ap.add_argument("--laser", help="ESP32 running turret_laser.ino, e.g. COM10 (optional)")
     ap.add_argument("--cam", type=int, default=-1, help="webcam index (e.g. 0); default: no camera")
@@ -113,7 +114,7 @@ def main():
             elif vel[sid]:
                 here = here or servos.read_deg()
                 if here is not None:
-                    out[i] = here[i] + np.sign(vel[sid]) * vel[sid] ** 2 / (2 * acc_deg)
+                    out[i] = here[i] + a.stop_scale * np.sign(vel[sid]) * vel[sid] ** 2 / (2 * acc_deg)
                 vel[sid] = 0.0
                 set_speed(sid, 2500)
         return out[0], out[1]
