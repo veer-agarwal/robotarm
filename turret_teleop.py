@@ -61,6 +61,7 @@ def hud(frame, pan, tilt, armed, firing, lim, flips):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", required=True, help="turret servo board (CH343), e.g. COM9")
+    ap.add_argument("--acc", type=int, default=150, help="servo acceleration 1-254: higher = stops sooner when you let go (40 coasts ~11 deg)")
     ap.add_argument("--laser", help="ESP32 running turret_laser.ino, e.g. COM10 (optional)")
     ap.add_argument("--cam", type=int, default=-1, help="webcam index (e.g. 0); default: no camera")
     ap.add_argument("--width", type=int, default=640); ap.add_argument("--height", type=int, default=480)
@@ -87,7 +88,7 @@ def main():
     print("Gliding to home...")
     for sid in (PAN_ID, TILT_ID):
         move_watch(servos.bus, sid, servos.home[sid], speed=300)
-        servos.bus.write(sid, ADDR_ACC, 40)
+        servos.bus.write(sid, ADDR_ACC, a.acc)
         servos.bus.write(sid, ADDR_SPEED, 2500, 2)
     pan = tilt = 0.0
     flips = [-1 if a.flip_pan else 1, -1 if a.flip_tilt else 1]
