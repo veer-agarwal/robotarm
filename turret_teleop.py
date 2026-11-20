@@ -23,7 +23,6 @@ AX_LX, AX_LY, AX_RX, AX_RY, AX_LT, AX_RT = 0, 1, 2, 3, 4, 5
 BTN_A, BTN_B, BTN_X, BTN_Y, BTN_LB, BTN_RB, BTN_BACK, BTN_START = 0, 1, 2, 3, 4, 5, 6, 7
 DEADZONE = 0.12
 PAN_RATE, TILT_RATE = 90.0, 60.0      # deg/s at full left stick
-MAX_LEAD = 3.0                         # deg the stick target may run ahead of the turret
 FINE = 0.25                           # right stick speed factor
 NUDGE = 0.5                           # deg per D-pad press
 HZ = 50
@@ -94,6 +93,31 @@ def main():
     pan = tilt = 0.0
     flips = [-1 if a.flip_pan else 1, -1 if a.flip_tilt else 1]
     armed = False
+    acc_deg = a.acc * 100 / TPD                       # servo ACC register is in 100 steps/s^2
+    vel, spd = {PAN_ID: 0.0, TILT_ID: 0.0}, {PAN_ID: 2500, TILT_ID: 2500}
+
+    def set_speed(sid, steps):
+        steps = int(max(20, min(2500, steps)))
+        if abs(steps - spd[sid]) > 0.05 * spd[sid]:
+            servos.bus.write(sid, ADDR_SPEED, steps, 2); spd[sid] = steps
+
+    def drive(pan, tilt, vx, vy):
+        """Stick = speed. Held: head for the end of the range at the stick's speed (the servo does the motion,
+        nothing runs ahead). Released: aim at where it naturally stops (v^2 / 2a), so no coast and no snap back."""
+        out, here = [pan, tilt], None
+        for i, (sid, v, rate) in enumerate(((PAN_ID, flips[0] * vx, PAN_RATE), (TILT_ID, flips[1] * vy, TILT_RATE))):
+            if v:
+                set_speed(sid, abs(v) * rate * TPD)
+                out[i] = lim[sid][1] if v > 0 else lim[sid][0]
+                vel[sid] = v * rate
+            elif vel[sid]:
+                here = here or servos.read_deg()
+                if here is not None:
+                    out[i] = here[i] + np.sign(vel[sid]) * vel[sid] ** 2 / (2 * acc_deg)
+                vel[sid] = 0.0
+                set_speed(sid, 2500)
+        return out[0], out[1]
+
     prev = {}
     homing = False
     print("Ready. Y arms the laser, RT fires, B quits.")
@@ -129,13 +153,7 @@ def main():
                 pan *= 0.9 if abs(pan) > 0.3 else 0; tilt *= 0.9 if abs(tilt) > 0.3 else 0
                 homing = bool(pan or tilt)
             else:
-                pan += flips[0] * vx * PAN_RATE * dt
-                tilt += flips[1] * vy * TILT_RATE * dt
-                if vx or vy:                                 # keep the target close to where the turret IS, so
-                    here = servos.read_deg()                 # letting go doesn't leave it far ahead (no coast)
-                    if here is not None:
-                        pan = float(np.clip(pan, here[0] - MAX_LEAD, here[0] + MAX_LEAD))
-                        tilt = float(np.clip(tilt, here[1] - MAX_LEAD, here[1] + MAX_LEAD))
+                pan, tilt = drive(pan, tilt, vx, vy)
                 if hx or hy:
                     key = (hx, hy)
                     if prev.get("hat") != key:
